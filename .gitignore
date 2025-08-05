@@ -1,0 +1,141 @@
+# ============================================================================
+# BU-PROCESSOR GITIGNORE
+# ============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# API Keys & Tokens (wichtig!)
+*.key
+*.pem
+secrets/
+config/secrets/
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Cache & Temporary Files
+cache/
+temp/
+tmp/
+*.tmp
+*.temp
+.cache/
+*.log
+logs/
+
+# Model Files (können sehr groß sein)
+models/
+*.bin
+*.h5
+*.onnx
+*.pkl
+*.joblib
+
+# PDF Test Files (privacy)
+tests/fixtures/*.pdf
+tests/test_data/*.pdf
+sample_pdfs/
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+
+# Output Directories
+output/
+results/
+exports/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Coverage Reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation Build
+docs/_build/
+site/
+
+# Package Files
+*.tar.gz
+*.zip
+*.rar
+
+# Local Configuration
+config.local.py
+settings.local.py
+
+# System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Pinecone & Vector DB Data
+pinecone_data/
+embeddings_cache/
+
+# Large Files (GitHub limit 100MB)
+*.wav
+*.mp4
+*.avi
+*.mov
+*.mkv

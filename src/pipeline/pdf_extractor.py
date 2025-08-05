@@ -1,0 +1,839 @@
+import fitz  # PyMuPDF
+import PyPDF2
+from pathlib import Path
+from typing import Dict, List, Optional, Union, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
+import unicodedata
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
+import os
+
+# Import semantic chunking (mit fallback)
+try:
+    from .semantic_chunking_enhancement import SemanticClusteringEnhancer
+    SEMANTIC_CHUNKING_AVAILABLE = True
+except ImportError:
+    SEMANTIC_CHUNKING_AVAILABLE = False
+
+# Config import mit Fallback und Logger
+try:
+    from ..core.config import (
+        PDF_EXTRACTION_METHOD, MAX_PDF_SIZE_MB, MAX_PDF_PAGES, 
+        PDF_TEXT_CLEANUP, MIN_EXTRACTED_TEXT_LENGTH, MAX_BATCH_PDF_COUNT,
+        PDF_CACHE_DIR, ENABLE_PDF_CACHE, SUPPORTED_PDF_EXTENSIONS,
+        PDF_FALLBACK_CHAIN, EXTRACT_PDF_METADATA, NORMALIZE_WHITESPACE,
+        AUTO_DETECT_LANGUAGE, LOG_LEVEL
+    )
+    # Logger Setup aus config
+    import structlog
+    import logging
+    
+    # Configure structlog with proper log level
+    logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+    logger = structlog.get_logger("pipeline.pdf_extractor")
+    
+except ImportError:
+    # Fallback values und basic logging
+    PDF_EXTRACTION_METHOD = "pymupdf"
+    MAX_PDF_SIZE_MB = 50
+    MAX_PDF_PAGES = 100
+    PDF_TEXT_CLEANUP = True
+    MIN_EXTRACTED_TEXT_LENGTH = 10
+    MAX_BATCH_PDF_COUNT = 20
+    PDF_CACHE_DIR = "cache/pdf_extractions"
+    ENABLE_PDF_CACHE = True
+    SUPPORTED_PDF_EXTENSIONS = [".pdf"]
+    PDF_FALLBACK_CHAIN = True
+    EXTRACT_PDF_METADATA = True
+    NORMALIZE_WHITESPACE = True
+    AUTO_DETECT_LANGUAGE = False
+    LOG_LEVEL = "INFO"
+    
+    # Basic logger fallback
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("pipeline.pdf_extractor")
+
+# Custom Exceptions for better error handling
+class PDFExtractionError(Exception):
+    """Base exception for PDF extraction errors"""
+    pass
+
+class PDFCorruptedError(PDFExtractionError):
+    """Raised when PDF file is corrupted or unreadable"""
+    pass
+
+class PDFTooLargeError(PDFExtractionError):
+    """Raised when PDF exceeds size limits"""
+    pass
+
+class PDFPasswordProtectedError(PDFExtractionError):
+    """Raised when PDF is password protected"""
+    pass
+
+class PDFTextExtractionError(PDFExtractionError):
+    """Raised when text extraction fails"""
+    pass
+
+@dataclass
+class DocumentChunk:
+    """Einzelner Text-Chunk mit Metadaten"""
+    id: str
+    text: str
+    start_position: int
+    end_position: int
+    page_number: Optional[int] = None
+    heading_text: str = ""
+    chunk_type: str = "paragraph"
+    importance_score: float = 1.0
+    metadata: Dict = field(default_factory=dict)
+
+@dataclass
+class ExtractedContent:
+    """Container für extrahierte PDF-Inhalte mit Chunking-Support"""
+    text: str
+    page_count: int
+    file_path: str
+    metadata: Dict
+    extraction_method: str
+    # Neue Felder für Chunking
+    chunks: List[DocumentChunk] = field(default_factory=list)
+    semantic_clusters: Optional[Dict] = None
+    chunking_enabled: bool = False
+    chunking_method: str = "none"
+    # Performance metrics
+    extraction_time: float = 0.0
+    text_cleaned: bool = False
+
+class ChunkingStrategy(Enum):
+    """Verfügbare Chunking-Strategien"""
+    NONE = "none"
+    SIMPLE = "simple"  # Einfache Absatz-basierte Teilung
+    SEMANTIC = "semantic"  # KI-basiertes semantisches Chunking
+    HYBRID = "hybrid"  # Kombination aus einfach + semantisch
+    BALANCED = "balanced"
+class TextCleaner:
+    """Utility class for text cleaning and normalization"""
+    
+    @staticmethod
+    def clean_text(text: str, normalize_whitespace: bool = True) -> str:
+        """Comprehensive text cleaning with Unicode normalization"""
+        if not text:
+            return ""
+        
+        try:
+            # Unicode normalization (NFC form)
+            cleaned = unicodedata.normalize('NFC', text)
+            
+            # Remove or replace problematic characters
+            cleaned = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', cleaned)
+            
+            # Fix common PDF extraction issues
+            cleaned = re.sub(r'(?<!\n)([a-z])([A-Z])', r'\1 \2', cleaned)  # Fix missing spaces
+            cleaned = re.sub(r'([.!?])([A-Z])', r'\1 \2', cleaned)  # Space after punctuation
+            
+            if normalize_whitespace:
+                # Normalize whitespace
+                cleaned = re.sub(r'\s+', ' ', cleaned)  # Multiple spaces to single
+                cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)  # Clean paragraph breaks
+                cleaned = cleaned.strip()
+            
+            return cleaned
+            
+        except Exception as e:
+            logger.warning(f"Text cleaning failed, returning original: {e}", exc_info=True)
+            return text
+    
+    @staticmethod
+    def detect_language(text: str) -> str:
+        """Simple language detection (placeholder for advanced implementation)"""
+        try:
+            # Basic heuristic language detection
+            if not text or len(text) < 50:
+                return "unknown"
+            
+            # Count common words/patterns for German/English
+            german_indicators = ['der', 'die', 'das', 'und', 'ist', 'ein', 'eine', 'nicht', 'ich', 'auf']
+            english_indicators = ['the', 'and', 'is', 'a', 'an', 'not', 'i', 'on', 'to', 'of']
+            
+            text_lower = text.lower()
+            german_count = sum(1 for word in german_indicators if f' {word} ' in text_lower)
+            english_count = sum(1 for word in english_indicators if f' {word} ' in text_lower)
+            
+            if german_count > english_count:
+                return "de"
+            elif english_count > german_count:
+                return "en"
+            else:
+                return "unknown"
+                
+        except Exception:
+            return "unknown"
+    
+    @staticmethod
+    def validate_extracted_text(text: str, min_length: int = MIN_EXTRACTED_TEXT_LENGTH) -> bool:
+        """Validate if extracted text meets quality criteria"""
+        if not text or len(text.strip()) < min_length:
+            return False
+        
+        # Check for reasonable text-to-character ratio
+        printable_chars = sum(1 for c in text if c.isprintable())
+        if printable_chars / len(text) < 0.7:  # At least 70% printable characters
+            return False
+        
+        return True
+
+class EnhancedPDFExtractor:
+    """Erweiterte PDF-Text-Extraktion mit integriertem semantischem Chunking"""
+    
+    def __init__(self, prefer_method: str = None, enable_chunking: bool = True, max_workers: int = 4):
+        self.prefer_method = prefer_method or PDF_EXTRACTION_METHOD
+        self.supported_methods = ["pymupdf", "pypdf2"]
+        self.enable_chunking = enable_chunking
+        self.max_workers = max_workers
+        self.text_cleaner = TextCleaner()
+        
+        # Thread-safe lock für parallel processing
+        self._lock = threading.Lock()
+        
+        # Semantic Enhancer initialisieren falls verfügbar
+        if SEMANTIC_CHUNKING_AVAILABLE and enable_chunking:
+            try:
+                self.semantic_enhancer = SemanticClusteringEnhancer()
+                logger.info("Semantic chunking enhancer loaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to load semantic enhancer: {e}", exc_info=True)
+                self.semantic_enhancer = None
+        else:
+            self.semantic_enhancer = None
+            if enable_chunking and not SEMANTIC_CHUNKING_AVAILABLE:
+                logger.warning("Semantic chunking requested but not available")
+    
+    def _validate_pdf(self, pdf_path: Path) -> None:
+        """Validate PDF file before processing"""
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF nicht gefunden: {pdf_path}")
+            
+        if pdf_path.suffix.lower() not in SUPPORTED_PDF_EXTENSIONS:
+            raise ValueError(f"Unsupported file type: {pdf_path.suffix}. Supported: {SUPPORTED_PDF_EXTENSIONS}")
+        
+        # Check file size
+        file_size_mb = pdf_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > MAX_PDF_SIZE_MB:
+            raise PDFTooLargeError(f"PDF too large: {file_size_mb:.1f}MB > {MAX_PDF_SIZE_MB}MB")
+        
+        logger.debug("PDF validation passed", file=str(pdf_path), size_mb=f"{file_size_mb:.1f}")
+    
+    def _check_pdf_health(self, pdf_path: Path) -> Dict:
+        """Quick health check of PDF file"""
+        try:
+            with fitz.open(str(pdf_path)) as doc:
+                page_count = len(doc)
+                is_encrypted = doc.needs_pass
+                has_text = False
+                
+                # Check first few pages for text content
+                check_pages = min(3, page_count)
+                for i in range(check_pages):
+                    page = doc.load_page(i)
+                    if page.get_text().strip():
+                        has_text = True
+                        break
+                
+                return {
+                    "page_count": page_count,
+                    "is_encrypted": is_encrypted,
+                    "has_text_content": has_text,
+                    "file_size_mb": pdf_path.stat().st_size / (1024 * 1024)
+                }
+                
+        except Exception as e:
+            logger.warning(f"PDF health check failed for {pdf_path}: {e}", exc_info=True)
+            return {"health_check_failed": True, "error": str(e)}
+        
+    def extract_text_from_pdf(
+        self, 
+        pdf_path: Union[str, Path], 
+        chunking_strategy: ChunkingStrategy = ChunkingStrategy.SIMPLE,
+        max_chunk_size: int = 1000,
+        overlap_size: int = 100
+    ) -> ExtractedContent:
+        """Hauptmethode für PDF-Text-Extraktion mit optionalem Chunking"""
+        pdf_path = Path(pdf_path)
+        start_time = time.time()
+        
+        # Validierung mit besseren Exceptions
+        try:
+            self._validate_pdf(pdf_path)
+        except (FileNotFoundError, ValueError, PDFTooLargeError) as e:
+            logger.error(f"PDF validation failed for {pdf_path}: {e}", exc_info=True)
+            raise
+        
+        # PDF Health Check
+        health_info = self._check_pdf_health(pdf_path)
+        if health_info.get("health_check_failed"):
+            logger.warning("PDF health check failed, proceeding with caution", file=str(pdf_path))
+        elif health_info.get("is_encrypted"):
+            raise PDFPasswordProtectedError(f"PDF is password protected: {pdf_path}")
+        elif not health_info.get("has_text_content"):
+            logger.warning("PDF may not contain extractable text", file=str(pdf_path))
+        
+        logger.info("PDF-Extraktion gestartet", 
+                   file=str(pdf_path), 
+                   method=self.prefer_method,
+                   chunking=chunking_strategy.value,
+                   pages=health_info.get("page_count", "unknown"),
+                   size_mb=health_info.get("file_size_mb", "unknown"))
+        
+        # Grundlegende PDF-Extraktion mit Performance-Tracking
+        try:
+            base_content = self._extract_base_content(pdf_path)
+            
+            # Text-Bereinigung anwenden falls konfiguriert
+            if PDF_TEXT_CLEANUP and base_content.text:
+                original_length = len(base_content.text)
+                base_content.text = self.text_cleaner.clean_text(
+                    base_content.text, 
+                    normalize_whitespace=NORMALIZE_WHITESPACE
+                )
+                base_content.text_cleaned = True
+                
+                logger.debug("Text cleaning applied", 
+                           original_length=original_length, 
+                           cleaned_length=len(base_content.text))
+                
+                # Validiere bereinigten Text
+                if not self.text_cleaner.validate_extracted_text(base_content.text):
+                    logger.warning("Extracted text quality is poor", 
+                                 text_length=len(base_content.text),
+                                 file=str(pdf_path))
+            
+            # Sprach-Erkennung falls aktiviert
+            if AUTO_DETECT_LANGUAGE and base_content.text:
+                detected_language = self.text_cleaner.detect_language(base_content.text)
+                base_content.metadata['detected_language'] = detected_language
+                logger.debug("Language detected", language=detected_language)
+            
+            # Performance-Metriken hinzufügen
+            extraction_time = time.time() - start_time
+            base_content.extraction_time = extraction_time
+            
+        except (PDFCorruptedError, PDFPasswordProtectedError, PDFTextExtractionError) as e:
+            logger.error(f"PDF extraction failed with {type(e).__name__} for {pdf_path}: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during PDF extraction for {pdf_path}: {e}", exc_info=True)
+            raise PDFExtractionError(f"PDF extraction failed: {e}") from e
+        
+        # Chunking anwenden falls gewünscht
+        if chunking_strategy != ChunkingStrategy.NONE and self.enable_chunking:
+            chunks = self._apply_chunking_strategy(
+                base_content.text,
+                chunking_strategy,
+                max_chunk_size,
+                overlap_size,
+                base_content.page_count
+            )
+            
+            # Enhanced Content mit Chunks erstellen
+            enhanced_content = ExtractedContent(
+                text=base_content.text,
+                page_count=base_content.page_count,
+                file_path=base_content.file_path,
+                metadata=base_content.metadata,
+                extraction_method=base_content.extraction_method,
+                chunks=chunks,
+                chunking_enabled=True,
+                chunking_method=chunking_strategy.value
+            )
+            
+            # Semantic Clustering falls verfügbar
+            if (chunking_strategy in [ChunkingStrategy.SEMANTIC, ChunkingStrategy.HYBRID] 
+                and self.semantic_enhancer):
+                enhanced_content = self._apply_semantic_enhancement(enhanced_content)
+            
+            logger.info("PDF-Extraktion mit Chunking abgeschlossen",
+                       chunks_created=len(chunks),
+                       chunking_method=chunking_strategy.value)
+            
+            return enhanced_content
+        else:
+            # Rückgabe ohne Chunking (Kompatibilität)
+            return base_content
+    
+    def _extract_base_content(self, pdf_path: Path) -> ExtractedContent:
+        """Basis PDF-Extraktion ohne Chunking"""
+        # Versuche bevorzugte Methode
+        try:
+            if self.prefer_method == "pymupdf":
+                return self._extract_with_pymupdf(pdf_path)
+            elif self.prefer_method == "pypdf2":
+                return self._extract_with_pypdf2(pdf_path)
+        except Exception as e:
+            logger.warning(f"Bevorzugte Methode {self.prefer_method} fehlgeschlagen: {e}")
+            
+        # Fallback zu anderen Methoden
+        for method in self.supported_methods:
+            if method != self.prefer_method:
+                try:
+                    logger.info("Fallback-Versuch", method=method)
+                    if method == "pymupdf":
+                        return self._extract_with_pymupdf(pdf_path)
+                    elif method == "pypdf2":
+                        return self._extract_with_pypdf2(pdf_path)
+                except Exception as e:
+                    logger.warning(f"Fallback {method} fehlgeschlagen: {e}")
+                    continue
+        
+        raise RuntimeError(f"Alle Extraktionsmethoden fehlgeschlagen für: {pdf_path}")
+    
+    def _apply_chunking_strategy(
+        self, 
+        text: str, 
+        strategy: ChunkingStrategy, 
+        max_chunk_size: int,
+        overlap_size: int,
+        page_count: int
+    ) -> List[DocumentChunk]:
+        """Wendet gewählte Chunking-Strategie an"""
+        
+        if strategy == ChunkingStrategy.SIMPLE:
+            return self._simple_chunking(text, max_chunk_size, overlap_size)
+        elif strategy == ChunkingStrategy.SEMANTIC:
+            return self._semantic_chunking(text, max_chunk_size)
+        elif strategy == ChunkingStrategy.HYBRID:
+            # Kombination: Erst einfach, dann semantisch verfeinern
+            simple_chunks = self._simple_chunking(text, max_chunk_size, overlap_size)
+            return self._refine_chunks_semantically(simple_chunks)
+        else:
+            return []
+    
+    def _simple_chunking(self, text: str, max_chunk_size: int, overlap_size: int) -> List[DocumentChunk]:
+        """Einfache absatz-basierte Chunking-Strategie"""
+        chunks = []
+        
+        # Teile nach Absätzen
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        
+        current_chunk = ""
+        current_start = 0
+        chunk_id = 0
+        
+        for paragraph in paragraphs:
+            # Prüfe ob Paragraph in aktuellen Chunk passt
+            if len(current_chunk) + len(paragraph) <= max_chunk_size:
+                if current_chunk:
+                    current_chunk += "\n\n" + paragraph
+                else:
+                    current_chunk = paragraph
+            else:
+                # Erstelle Chunk falls vorhanden
+                if current_chunk:
+                    chunk = DocumentChunk(
+                        id=f"chunk_{chunk_id}",
+                        text=current_chunk,
+                        start_position=current_start,
+                        end_position=current_start + len(current_chunk),
+                        chunk_type="paragraph_group",
+                        importance_score=1.0
+                    )
+                    chunks.append(chunk)
+                    chunk_id += 1
+                    
+                    # Overlap handling
+                    if overlap_size > 0 and len(current_chunk) > overlap_size:
+                        overlap_text = current_chunk[-overlap_size:]
+                        current_chunk = overlap_text + "\n\n" + paragraph
+                        current_start = chunk.end_position - overlap_size
+                    else:
+                        current_chunk = paragraph
+                        current_start = chunk.end_position
+                else:
+                    current_chunk = paragraph
+        
+        # Letzten Chunk hinzufügen
+        if current_chunk:
+            chunk = DocumentChunk(
+                id=f"chunk_{chunk_id}",
+                text=current_chunk,
+                start_position=current_start,
+                end_position=current_start + len(current_chunk),
+                chunk_type="paragraph_group",
+                importance_score=1.0
+            )
+            chunks.append(chunk)
+        
+        logger.info(f"Simple chunking completed", chunks_created=len(chunks))
+        return chunks
+    
+    def _semantic_chunking(self, text: str, max_chunk_size: int) -> List[DocumentChunk]:
+        """Semantisches Chunking mit KI-Unterstützung"""
+        if not self.semantic_enhancer:
+            logger.warning("Semantic chunking requested but enhancer not available, falling back to simple")
+            return self._simple_chunking(text, max_chunk_size, 0)
+        
+        # TODO: Vollständige Integration mit semantic_chunking_enhancement
+        # Für jetzt: Fallback zu simple chunking mit verbesserter Logik
+        logger.info("Semantic chunking using enhanced simple strategy")
+        
+        # Verwende kleinere Chunks für semantische Analyse
+        chunks = self._simple_chunking(text, max_chunk_size // 2, 50)
+        
+        # Erweitere Chunks mit semantischen Informationen
+        for chunk in chunks:
+            chunk.metadata['semantic_ready'] = True
+            chunk.chunk_type = "semantic_paragraph"
+        
+        return chunks
+    
+    def _refine_chunks_semantically(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+        """Verfeinert bestehende Chunks semantisch"""
+        if not self.semantic_enhancer:
+            return chunks
+        
+        logger.info("Applying semantic refinement to chunks", chunk_count=len(chunks))
+        
+        # Placeholder für semantische Verfeinerung
+        for chunk in chunks:
+            chunk.metadata['semantic_refined'] = True
+            chunk.chunk_type = "hybrid_chunk"
+            # Erhöhe Importance Score für größere Chunks (potentiell wichtiger)
+            if len(chunk.text) > 500:
+                chunk.importance_score += 0.2
+        
+        return chunks
+    
+    def _apply_semantic_enhancement(self, content: ExtractedContent) -> ExtractedContent:
+        """Wendet semantische Verbesserungen auf Chunks an"""
+        if not self.semantic_enhancer or not content.chunks:
+            return content
+        
+        try:
+            logger.info("Applying semantic enhancement to chunks", chunk_count=len(content.chunks))
+            
+            # Hier würde die vollständige Integration mit semantic_chunking_enhancement erfolgen
+            # enhanced_chunks = self.semantic_enhancer.enhance_chunks_with_semantic_clustering(...)
+            
+            # Für jetzt: Chunk-Metadaten erweitern
+            for i, chunk in enumerate(content.chunks):
+                chunk.metadata['semantic_analysis'] = {
+                    'processed': True,
+                    'enhancement_version': '1.0',
+                    'chunk_index': i,
+                    'relative_importance': chunk.importance_score
+                }
+            
+            content.semantic_clusters = {
+                'total_clusters': max(1, len(content.chunks) // 3),  # Placeholder
+                'enhancement_applied': True,
+                'clustering_strategy': content.chunking_method
+            }
+            
+            logger.info("Semantic enhancement completed")
+            
+        except Exception as e:
+            logger.error(f"Semantic enhancement failed: {e}", exc_info=True)
+        
+        return content
+    
+    def _extract_with_pymupdf(self, pdf_path: Path) -> ExtractedContent:
+        """Text-Extraktion mit PyMuPDF (empfohlen) mit paralleler Verarbeitung"""
+        try:
+            with fitz.open(str(pdf_path)) as doc:
+                page_count = len(doc)
+                
+                # Check für zu viele Seiten
+                if page_count > MAX_PDF_PAGES:
+                    logger.warning("PDF has many pages, extraction may be slow", 
+                                 pages=page_count, max_allowed=MAX_PDF_PAGES)
+                
+                # Password check
+                if doc.needs_pass:
+                    raise PDFPasswordProtectedError(f"PDF requires password: {pdf_path}")
+                
+                # Metadata extrahieren falls konfiguriert
+                metadata = {}
+                if EXTRACT_PDF_METADATA:
+                    try:
+                        metadata = dict(doc.metadata) if doc.metadata else {}
+                        metadata['fitz_page_count'] = page_count
+                        metadata['fitz_is_pdf'] = doc.is_pdf
+                    except Exception as e:
+                        logger.warning(f"Failed to extract metadata: {e}")
+                
+                # Parallele Extraktion für große PDFs
+                if page_count > 10 and self.max_workers > 1:
+                    text = self._extract_pages_parallel(doc, page_count)
+                else:
+                    # Sequentielle Extraktion für kleine PDFs
+                    text = self._extract_pages_sequential(doc, page_count)
+                
+                if not text or len(text.strip()) < MIN_EXTRACTED_TEXT_LENGTH:
+                    raise PDFTextExtractionError(f"No meaningful text extracted from PDF: {pdf_path}")
+                
+                logger.info("PyMuPDF Extraktion erfolgreich", 
+                           pages=page_count, 
+                           text_length=len(text),
+                           file=str(pdf_path),
+                           extraction_mode="parallel" if page_count > 10 else "sequential")
+                
+                return ExtractedContent(
+                    text=text.strip(),
+                    page_count=page_count,
+                    file_path=str(pdf_path),
+                    metadata=metadata,
+                    extraction_method="pymupdf"
+                )
+                
+        except fitz.FileNotFoundError:
+            raise FileNotFoundError(f"PyMuPDF cannot find file: {pdf_path}")
+        except fitz.FileDataError as e:
+            raise PDFCorruptedError(f"PDF file is corrupted: {e}")
+        except MemoryError:
+            raise PDFTooLargeError(f"PDF too large to process in memory: {pdf_path}")
+        except Exception as e:
+            logger.error(f"PyMuPDF extraction failed for {pdf_path}: {e}", exc_info=True)
+            raise PDFTextExtractionError(f"PyMuPDF extraction failed: {e}") from e
+    
+    def _extract_pages_parallel(self, doc, page_count: int) -> str:
+        """Parallele Seiten-Extraktion für große PDFs"""
+        def extract_page(page_num: int) -> Tuple[int, str]:
+            try:
+                page = doc.load_page(page_num)
+                return page_num, page.get_text()
+            except Exception as e:
+                logger.warning(f"Failed to extract page {page_num}: {e}")
+                return page_num, ""
+        
+        # Thread-safe extraction
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_page = {executor.submit(extract_page, i): i for i in range(page_count)}
+            page_texts = {}
+            
+            for future in as_completed(future_to_page):
+                try:
+                    page_num, page_text = future.result(timeout=30)  # 30s timeout per page
+                    page_texts[page_num] = page_text
+                except Exception as e:
+                    page_num = future_to_page[future]
+                    logger.warning(f"Page extraction failed for page {page_num}: {e}")
+                    page_texts[page_num] = ""
+        
+        # Reassemble text in correct order
+        text_parts = [page_texts.get(i, "") for i in range(page_count)]
+        return "\n".join(text_parts)
+    
+    def _extract_pages_sequential(self, doc, page_count: int) -> str:
+        """Sequentielle Seiten-Extraktion für kleinere PDFs"""
+        text_parts = []
+        
+        for page_num in range(page_count):
+            try:
+                page = doc.load_page(page_num)
+                page_text = page.get_text()
+                text_parts.append(page_text)
+            except Exception as e:
+                logger.warning(f"Failed to extract page {page_num}: {e}")
+                text_parts.append("")  # Keep page order
+        
+        return "\n".join(text_parts)
+    
+    def _extract_with_pypdf2(self, pdf_path: Path) -> ExtractedContent:
+        """Text-Extraktion mit PyPDF2 (Fallback) mit verbessertem Error Handling"""
+        try:
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                page_count = len(pdf_reader.pages)
+                
+                # Check für zu viele Seiten
+                if page_count > MAX_PDF_PAGES:
+                    logger.warning("PDF has many pages, extraction may be slow", 
+                                 pages=page_count, max_allowed=MAX_PDF_PAGES)
+                
+                # Password/Encryption check
+                if pdf_reader.is_encrypted:
+                    raise PDFPasswordProtectedError(f"PDF is encrypted: {pdf_path}")
+                
+                # Metadata extrahieren falls konfiguriert
+                metadata = {}
+                if EXTRACT_PDF_METADATA:
+                    try:
+                        if pdf_reader.metadata:
+                            # Convert PyPDF2 metadata to dict
+                            for key, value in pdf_reader.metadata.items():
+                                try:
+                                    metadata[key] = str(value) if value else ""
+                                except Exception:
+                                    continue
+                        metadata['pypdf2_page_count'] = page_count
+                    except Exception as e:
+                        logger.warning(f"Failed to extract metadata with PyPDF2: {e}")
+                
+                # Text von allen Seiten extrahieren mit Error Handling
+                text_parts = []
+                failed_pages = 0
+                
+                for page_num in range(page_count):
+                    try:
+                        page = pdf_reader.pages[page_num]
+                        page_text = page.extract_text()
+                        text_parts.append(page_text if page_text else "")
+                    except Exception as e:
+                        logger.warning(f"Failed to extract page {page_num} with PyPDF2: {e}")
+                        text_parts.append("")  # Keep page order
+                        failed_pages += 1
+                
+                text = "\n".join(text_parts)
+                
+                if failed_pages > 0:
+                    logger.warning(f"Failed to extract {failed_pages}/{page_count} pages")
+                
+                if not text or len(text.strip()) < MIN_EXTRACTED_TEXT_LENGTH:
+                    raise PDFTextExtractionError(f"No meaningful text extracted with PyPDF2: {pdf_path}")
+                
+                logger.info("PyPDF2 Extraktion erfolgreich", 
+                           pages=page_count, 
+                           text_length=len(text),
+                           file=str(pdf_path),
+                           failed_pages=failed_pages)
+                
+                return ExtractedContent(
+                    text=text.strip(),
+                    page_count=page_count,
+                    file_path=str(pdf_path),
+                    metadata=metadata,
+                    extraction_method="pypdf2"
+                )
+                
+        except PyPDF2.errors.PdfReadError as e:
+            raise PDFCorruptedError(f"PyPDF2 cannot read PDF (corrupted?): {e}")
+        except PyPDF2.errors.FileNotDecryptedError:
+            raise PDFPasswordProtectedError(f"PDF requires password (PyPDF2): {pdf_path}")
+        except MemoryError:
+            raise PDFTooLargeError(f"PDF too large for PyPDF2: {pdf_path}")
+        except Exception as e:
+            logger.error(f"PyPDF2 extraction failed for {pdf_path}: {e}", exc_info=True)
+            raise PDFTextExtractionError(f"PyPDF2 extraction failed: {e}") from e
+    
+    def extract_multiple_pdfs(
+        self, 
+        pdf_directory: Union[str, Path],
+        chunking_strategy: ChunkingStrategy = ChunkingStrategy.SIMPLE,
+        max_chunk_size: int = 1000
+    ) -> List[ExtractedContent]:
+        """Mehrere PDFs aus einem Verzeichnis extrahieren mit Chunking"""
+        pdf_dir = Path(pdf_directory)
+        
+        if not pdf_dir.exists():
+            raise FileNotFoundError(f"Verzeichnis nicht gefunden: {pdf_dir}")
+        
+        pdf_files = list(pdf_dir.glob("*.pdf"))
+        
+        if not pdf_files:
+            logger.warning("Keine PDF-Dateien gefunden", directory=str(pdf_dir))
+            return []
+        
+        logger.info("Batch-Extraktion mit Chunking gestartet", 
+                   pdf_count=len(pdf_files),
+                   chunking_strategy=chunking_strategy.value)
+        
+        extracted_contents = []
+        
+        for pdf_file in pdf_files:
+            try:
+                content = self.extract_text_from_pdf(
+                    pdf_file, 
+                    chunking_strategy=chunking_strategy,
+                    max_chunk_size=max_chunk_size
+                )
+                extracted_contents.append(content)
+                
+                logger.info("PDF erfolgreich verarbeitet", 
+                           file=pdf_file.name,
+                           chunks_created=len(content.chunks) if content.chunking_enabled else 0)
+                
+            except Exception as e:
+                logger.error(f"PDF-Verarbeitung fehlgeschlagen für {pdf_file.name}: {e}", exc_info=True)
+                continue
+        
+        logger.info("Batch-Extraktion abgeschlossen", 
+                   successful=len(extracted_contents),
+                   failed=len(pdf_files) - len(extracted_contents))
+        
+        return extracted_contents
+
+# Backward compatibility - alias für alten Namen
+PDFExtractor = EnhancedPDFExtractor
+
+def demo_pdf_extraction_with_chunking():
+    """Demo-Funktion für PDF-Extraktion mit Chunking"""
+    print("🔍 Enhanced PDF-Extraktor Demo mit Chunking")
+    print("=========================================")
+    
+    extractor = EnhancedPDFExtractor(enable_chunking=True)
+    
+    # Beispiel-PDF-Pfad
+    test_pdf = Path("tests/fixtures/sample.pdf")
+    
+    if test_pdf.exists():
+        try:
+            print("\n📄 Teste verschiedene Chunking-Strategien:")
+            
+            # Test 1: Ohne Chunking
+            result_none = extractor.extract_text_from_pdf(
+                test_pdf, 
+                chunking_strategy=ChunkingStrategy.NONE
+            )
+            print(f"   ✅ NONE: Text-Länge: {len(result_none.text)} Zeichen")
+            
+            # Test 2: Simple Chunking
+            result_simple = extractor.extract_text_from_pdf(
+                test_pdf, 
+                chunking_strategy=ChunkingStrategy.SIMPLE,
+                max_chunk_size=500,
+                overlap_size=50
+            )
+            print(f"   ✅ SIMPLE: {len(result_simple.chunks)} Chunks erstellt")
+            
+            # Test 3: Semantic Chunking
+            result_semantic = extractor.extract_text_from_pdf(
+                test_pdf,
+                chunking_strategy=ChunkingStrategy.SEMANTIC,
+                max_chunk_size=800
+            )
+            print(f"   ✅ SEMANTIC: {len(result_semantic.chunks)} Chunks mit Semantik")
+            
+            # Test 4: Hybrid Chunking
+            result_hybrid = extractor.extract_text_from_pdf(
+                test_pdf,
+                chunking_strategy=ChunkingStrategy.HYBRID,
+                max_chunk_size=600
+            )
+            print(f"   ✅ HYBRID: {len(result_hybrid.chunks)} verfeinerte Chunks")
+            
+            print(f"\n📊 Chunk-Details (Simple Strategy):")
+            for i, chunk in enumerate(result_simple.chunks[:3]):  # Erste 3 Chunks
+                print(f"   Chunk {i+1}: {len(chunk.text)} Zeichen, Score: {chunk.importance_score:.2f}")
+                print(f"   Preview: {chunk.text[:100]}...")
+                print()
+            
+            print(f"🎯 Semantic Clustering Status:")
+            if result_semantic.semantic_clusters:
+                clusters = result_semantic.semantic_clusters
+                print(f"   Clusters: {clusters.get('total_clusters', 'N/A')}")
+                print(f"   Enhanced: {clusters.get('enhancement_applied', False)}")
+            else:
+                print("   Keine semantischen Cluster verfügbar")
+                
+        except Exception as e:
+            print(f"❌ Fehler: {e}")
+    else:
+        print(f"⚠️  Test-PDF nicht gefunden: {test_pdf}")
+        print("   Lege eine sample.pdf in tests/fixtures/ ab zum Testen")
+        print("   Oder verwende: python scripts/generate_test_pdfs.py")
+
+if __name__ == "__main__":
+    demo_pdf_extraction_with_chunking()
