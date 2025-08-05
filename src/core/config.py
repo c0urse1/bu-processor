@@ -95,6 +95,51 @@ class MLModelConfig(BaseSettings):
             path.parent.mkdir(parents=True, exist_ok=True)
             logger.info("Model-Pfad erstellt", path=str(path.parent))
         return v
+    
+    @validator('sentence_transformer_model')
+    def validate_sentence_transformer_model(cls, v):
+        """Validiere Sentence Transformer Model Name"""
+        import structlog
+        logger = structlog.get_logger("config.validator")
+        
+        # Gültige Modell-Präfixe und bekannte Modelle
+        valid_prefixes = [
+            'sentence-transformers/',
+            'paraphrase-',
+            'all-',
+            'multi-qa-',
+            'distilbert-',
+            'bert-',
+            'roberta-'
+        ]
+        
+        known_models = [
+            'paraphrase-multilingual-MiniLM-L12-v2',
+            'paraphrase-multilingual-mpnet-base-v2',
+            'paraphrase-MiniLM-L6-v2',
+            'all-MiniLM-L6-v2',
+            'all-mpnet-base-v2'
+        ]
+        
+        # Prüfe ob Modell bekannt ist oder gültiges Präfix hat
+        if v not in known_models and not any(v.startswith(prefix) for prefix in valid_prefixes):
+            logger.warning(
+                "Unbekanntes Sentence Transformer Modell",
+                model=v,
+                known_models=known_models[:3],  # Zeige nur erste 3
+                suggestion="Verwende bekannte Modelle oder prüfe Verfügbarkeit"
+            )
+            # Warnung aber kein Fehler - Modell könnte trotzdem funktionieren
+        
+        # Prüfe auf verdächtige/ungültige Zeichen
+        if not v.replace('-', '').replace('_', '').replace('/', '').replace('.', '').isalnum():
+            raise ValueError(f"Sentence Transformer Model enthält ungültige Zeichen: {v}")
+        
+        # Mindestlänge prüfen
+        if len(v) < 3:
+            raise ValueError("Sentence Transformer Model Name zu kurz")
+        
+        return v
 
 class PDFProcessingConfig(BaseSettings):
     """PDF-Verarbeitung spezifische Konfiguration"""
@@ -198,10 +243,34 @@ class APIConfig(BaseSettings):
     )
     
     @validator('api_key')
-    def validate_api_key(cls, v):
-        """Validiere API Key falls gesetzt"""
-        if v and len(v) < 8:
-            raise ValueError("API Key muss mindestens 8 Zeichen lang sein")
+    def validate_api_key(cls, v, values):
+        """Validiere API Key falls gesetzt oder in Production required"""
+        # Prüfe ob wir in Production sind (falls Environment bereits gesetzt)
+        environment = values.get('environment', os.getenv('BU_PROCESSOR_ENVIRONMENT', 'development'))
+        is_production = environment == 'production' or environment == Environment.PRODUCTION
+        
+        # In Production ist API Key obligatorisch
+        if is_production and (not v or v.strip() == ''):
+            raise ValueError("API Key ist in Production-Umgebung obligatorisch")
+        
+        # Falls API Key gesetzt ist, validiere Format und Länge
+        if v:
+            v = v.strip()
+            if len(v) < 8:
+                raise ValueError("API Key muss mindestens 8 Zeichen lang sein")
+            
+            # Prüfe auf verdächtige Zeichen (sollte alphanumerisch + einige Sonderzeichen sein)
+            import re
+            if not re.match(r'^[A-Za-z0-9_\-\.\+\=]+$', v):
+                raise ValueError("API Key enthält ungültige Zeichen")
+            
+            # Warne vor offensichtlich unsicheren Keys
+            weak_keys = ['12345678', 'password', 'apikey123', 'test1234', 'development']
+            if v.lower() in weak_keys:
+                import structlog
+                logger = structlog.get_logger("config.validator")
+                logger.warning("Schwacher API Key erkannt", key_start=v[:3])
+        
         return v
 
 class VectorDatabaseConfig(BaseSettings):
@@ -501,6 +570,13 @@ class BUProcessorConfig(BaseSettings):
                 pdf_config.max_pdf_size_mb = min(pdf_config.max_pdf_size_mb, 25)
                 pdf_config.max_batch_pdf_count = min(pdf_config.max_batch_pdf_count, 10)
                 pdf_config.enable_cache = False  # Kein Cache in Production
+            
+            # Zusätzliche Production-Validierung
+            api_config = values.get('api')
+            if api_config and not api_config.secret_key:
+                import structlog
+                logger = structlog.get_logger("config.validator")
+                logger.warning("Production ohne SECRET_KEY - bitte setzen für sichere Sessions")
         
         elif env == Environment.STAGING:
             # Staging: Production-nah aber mit mehr Logging
@@ -757,7 +833,7 @@ def reload_config(environment: Optional[str] = None) -> BUProcessorConfig:
 # ============================================================================
 
 def demo_config():
-    """Demo der modernen Konfiguration"""
+    """Demo der modernen Konfiguration - sicher ohne eval()"""
     
     # Setup demo logger
     import structlog
@@ -769,31 +845,60 @@ def demo_config():
     env_info = settings.get_environment_info()
     demo_logger.info("Environment Info", **env_info)
     
-    # Teste verschiedene Environments
+    # Teste verschiedene Environments - sicher ohne eval()
     demo_logger.info("Testing Different Environments")
     
-    for env in ["development", "staging", "production"]:
-        demo_logger.info(f"Testing {env.upper()} environment")
-        test_config = create_config(environment=env)
-        
-        demo_logger.info(f"{env.upper()} config",
-                        debug=test_config.debug,
-                        log_level=test_config.log_level.value,
-                        max_pdf_size=f"{test_config.pdf_processing.max_pdf_size_mb}MB",
-                        batch_count=test_config.pdf_processing.max_batch_pdf_count,
-                        cache_enabled=test_config.pdf_processing.enable_cache)
+    environments = {
+        "development": Environment.DEVELOPMENT,
+        "staging": Environment.STAGING, 
+        "production": Environment.PRODUCTION
+    }
+    
+    for env_name, env_enum in environments.items():
+        demo_logger.info(f"Testing {env_name.upper()} environment")
+        try:
+            test_config = create_config(environment=env_name)
+            
+            demo_logger.info(f"{env_name.upper()} config",
+                            debug=test_config.debug,
+                            log_level=test_config.log_level.value,
+                            max_pdf_size=f"{test_config.pdf_processing.max_pdf_size_mb}MB",
+                            batch_count=test_config.pdf_processing.max_batch_pdf_count,
+                            cache_enabled=test_config.pdf_processing.enable_cache)
+        except Exception as e:
+            demo_logger.error(f"Fehler beim Testen von {env_name}", error=str(e))
     
     # Zeige Pfade
-    demo_logger.info("Wichtige Pfade",
-                    cache_dir=str(settings.get_cache_dir()),
-                    model_dir=str(settings.get_model_dir()))
+    try:
+        demo_logger.info("Wichtige Pfade",
+                        cache_dir=str(settings.get_cache_dir()),
+                        model_dir=str(settings.get_model_dir()))
+    except Exception as e:
+        demo_logger.error("Fehler beim Laden der Pfade", error=str(e))
     
-    # Zeige Features
+    # Zeige Features - sichere Iteration
+    feature_list = ["vector_db", "chatbot", "cache", "gpu", "metadata_extraction", "semantic_clustering", "semantic_deduplication"]
     feature_status = {}
-    for feature in ["vector_db", "chatbot", "cache", "gpu", "metadata_extraction", "semantic_clustering", "semantic_deduplication"]:
-        feature_status[feature] = settings.is_feature_enabled(feature)
+    
+    for feature in feature_list:
+        try:
+            feature_status[feature] = settings.is_feature_enabled(feature)
+        except Exception as e:
+            demo_logger.warning(f"Fehler beim Prüfen von Feature {feature}", error=str(e))
+            feature_status[feature] = False
     
     demo_logger.info("Feature Status", **feature_status)
+    
+    # Validierungscheck
+    try:
+        issues = validate_config(settings)
+        if issues:
+            demo_logger.warning("Konfigurationsprobleme gefunden", issues=issues)
+        else:
+            demo_logger.info("Keine Konfigurationsprobleme gefunden")
+    except Exception as e:
+        demo_logger.error("Fehler bei Konfigurationsvalidierung", error=str(e))
+    
     demo_logger.info("Configuration Demo completed!")
 
 if __name__ == "__main__":

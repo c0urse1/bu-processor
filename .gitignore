@@ -139,3 +139,9 @@ embeddings_cache/
 *.avi
 *.mov
 *.mkv
+
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+cache/
