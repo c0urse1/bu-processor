@@ -1,23 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bu-processor"            # Paket-Name, klein und mit Bindestrich
+version = "0.1.0"                # Projekt-Version
+description = "BU-Processor-Pipeline für PDF-Parsing und ML-Klassifikation"
+readme = "README.md"             # Pfad zu deiner README
+license = { file = "LICENSE" }   # Lizenz-Datei
+authors = [
+  { name = "Nicl", email = "nicl@test.de" }
+]
+requires-python = ">=3.8"        # Minimale Python-Version
+dependencies = [
+  "pydantic>=2.0",
+  "pydantic-settings>=2.0",      # für BaseSettings in Pydantic 2.x
+  "transformers>=4.0",
+  "pinecone-client>=2.0",
+  # …füge hier deine weiteren Laufzeit-Abhängigkeiten hinzu…
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",                 # Test-Framework
+  "pytest-timeout>=2.4.0",       # für timeout-Option im pytest-Config
+  "pytest-cov>=4.0",             # Coverage-Messung
+  "pre-commit>=3.0",             # Pre-Commit-Hooks
+  "black>=22.3.0",               # Code-Formatter
+  "isort>=5.0",                  # Import-Organizer
+  "flake8>=6.0",                 # Linter
+  "bandit>=1.7",                 # Security-Scanner
+]
+
 [tool.pytest.ini_options]
 # Pytest Configuration für BU-Processor Tests
 minversion = "8.0"
 addopts = [
-    "-ra",                    # Show all test results summary
-    "-q",                     # Quiet mode
-    "--strict-markers",       # Strict marker validation  
-    "--strict-config",        # Strict config validation
-    "--cov=bu_processor",     # Coverage für bu_processor package
+    "-ra",                     # Show all test results summary
+    "-q",                      # Quiet mode
+    "--strict-markers",        # Strict marker validation  
+    "--strict-config",         # Strict config validation
+    "--cov=bu_processor",      # Coverage für bu_processor package
     "--cov-report=term-missing", # Coverage report mit fehlenden Zeilen
     "--cov-report=html:htmlcov", # HTML coverage report
-    "--tb=short",             # Kurze Traceback-Anzeige
-    "--durations=10",         # Zeige 10 langsamste Tests
+    "--tb=short",              # Kurze Traceback-Anzeige
+    "--durations=10",          # Zeige 10 langsamste Tests
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 
-# Marker für verschiedene Test-Kategorien
 markers = [
     "unit: Unit tests für einzelne Komponenten",
     "integration: Integration tests für Pipeline-Komponenten", 
@@ -27,18 +60,16 @@ markers = [
     "pdf: PDF-spezifische Tests",
     "ml: Machine Learning Model Tests",
     "async: Asynchrone Tests",
-    "parametrize: Parametrisierte Tests"
+    "parametrize: Parametrisierte Tests",
 ]
 
-# Filterung basierend auf verfügbaren Dependencies
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning", 
     "ignore:.*torch.*:UserWarning",
-    "ignore:.*transformers.*:FutureWarning"
+    "ignore:.*transformers.*:FutureWarning",
 ]
 
-# Test discovery
 norecursedirs = [
     ".git",
     ".tox", 
@@ -47,8 +78,7 @@ norecursedirs = [
     "*.egg",
     "node_modules",
     ".env",
-    "venv"
+    "venv",
 ]
 
-# Performance settings
-timeout = 300  # 5 Minuten timeout für sehr langsame Tests
+timeout = 300  # 5 Minuten Timeout für sehr langsame Tests

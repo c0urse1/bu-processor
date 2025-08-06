@@ -1,58 +1,77 @@
 ---
 name: 🐛 Bug Report
-about: Melde einen Bug oder ein unerwartetes Verhalten
+about: Report a bug to help us improve BU-Processor
 title: '[BUG] '
 labels: ['bug', 'needs-triage']
 assignees: ''
-
 ---
 
-## 🐛 Bug Beschreibung
-<!-- Kurze, klare Beschreibung des Bugs -->
+## 🐛 Bug Description
+<!-- Clear and concise description of what the bug is -->
 
-## 🔄 Reproduktionsschritte
-<!-- Schritte zur Reproduktion des Verhaltens -->
-1. Gehe zu '...'
-2. Führe aus: `python -m bu_processor.pipeline --input ...`
-3. Sieh Fehler
+## 🔄 Steps to Reproduce
+<!-- Exact steps to reproduce the behavior -->
+1. Go to '...'
+2. Click on '...'
+3. Run command '...'
+4. See error
 
-## ✅ Erwartetes Verhalten
-<!-- Beschreibe, was stattdessen passieren sollte -->
+## 🎯 Expected Behavior
+<!-- Clear description of what you expected to happen -->
 
-## ❌ Aktuelles Verhalten
-<!-- Was passiert tatsächlich? Füge Fehlermeldungen hinzu -->
+## 💥 Actual Behavior
+<!-- What actually happened? Include full error messages -->
 
 ```
-Fehlermeldung hier einfügen
+Error message here (if any)
 ```
 
-## 🖥️ System-Information
-- **OS**: [z.B. Windows 10, Ubuntu 20.04, macOS 12.0]
-- **Python Version**: [z.B. 3.9.0]
-- **BU-Processor Version**: [z.B. 3.0.0]
-- **GPU**: [CUDA verfügbar? Ja/Nein]
-- **Environment**: [development/staging/production]
+## 🖥️ Environment
+<!-- Please complete the following information -->
+- **OS**: [e.g. Windows 11, Ubuntu 22.04, macOS 13.0]
+- **Python Version**: [e.g. 3.9.7]
+- **BU-Processor Version**: [e.g. 3.0.0]
+- **GPU**: [e.g. NVIDIA RTX 3080, None, AMD RX 6800]
+- **Available RAM**: [e.g. 16GB]
 
-## 📋 Konfiguration
-<!-- Relevante .env oder config.yaml Einstellungen -->
-```yaml
-# Deine Konfiguration (ohne API Keys!)
+## 📋 Configuration
+<!-- Your .env configuration (remove sensitive data!) -->
+```bash
+BU_PROCESSOR_ENVIRONMENT=development
+BU_PROCESSOR_ML_MODEL__MODEL_PATH=bert-base-german-cased
+BU_PROCESSOR_PDF_PROCESSING__MAX_PDF_SIZE_MB=50
+# ... other relevant config
 ```
 
-## 📊 Log-Ausgabe
-<!-- Relevante Log-Ausgaben oder Stack-Traces -->
+## 📄 Sample Data
+<!-- If applicable, describe the input that caused the issue -->
+- **PDF Size**: [e.g. 2.5MB, 50 pages]
+- **Content Type**: [e.g. Legal text, Technical manual, Mixed]
+- **Language**: [e.g. German, English, Mixed]
+- **Special Characteristics**: [e.g. scanned document, many tables, handwritten notes]
+
+<!-- If possible, attach a minimal sample that reproduces the issue -->
+
+## 📊 Logs & Output
+<!-- Include relevant log output, stack traces, console output -->
+<details>
+<summary>Log Output</summary>
+
 ```
-[2025-01-XX XX:XX:XX] ERROR: ...
+Paste log output here
 ```
+</details>
 
-## 📎 Zusätzliche Informationen
-- [ ] Das Problem tritt konsistent auf
-- [ ] Das Problem tritt nur manchmal auf
-- [ ] Das Problem tritt nur bei bestimmten PDFs auf
-- [ ] Das Problem ist neu seit Version X
+## 🔍 Additional Context
+<!-- Add any other context about the problem here -->
+- When did this start happening?
+- Does it happen consistently or intermittently?
+- Any workarounds you've found?
+- Related issues or discussions?
 
-## 💡 Mögliche Lösung
-<!-- Falls du bereits eine Idee für die Lösung hast -->
-
-## 🔗 Verwandte Issues
-<!-- Verlinke ähnliche oder verwandte Issues -->
+## ✅ Pre-submission Checklist
+- [ ] I have searched existing issues to avoid duplicates
+- [ ] I have provided all requested information
+- [ ] I have tested with the latest version
+- [ ] I have included relevant logs and error messages
+- [ ] I have removed any sensitive information from the report

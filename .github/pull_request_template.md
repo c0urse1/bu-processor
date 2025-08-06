@@ -1,134 +1,181 @@
-## 📝 Beschreibung
-<!-- Beschreibe deine Änderungen kurz und präzise -->
+## 📋 PR Summary
+<!-- Brief, clear description of what this PR does -->
 
-**Was:** <!-- Was wurde geändert? -->
+## 🎯 Related Issues
+<!-- Link to related issues using GitHub keywords -->
+Closes #123
+Fixes #456
+Relates to #789
 
-**Warum:** <!-- Warum war diese Änderung notwendig? -->
+## 🔄 Type of Change
+<!-- Mark the type of change this PR introduces -->
+- [ ] 🐛 **Bug fix** (non-breaking change which fixes an issue)
+- [ ] ✨ **New feature** (non-breaking change which adds functionality)
+- [ ] 💥 **Breaking change** (fix or feature that would cause existing functionality to not work as expected)
+- [ ] 📚 **Documentation update** (changes to documentation only)
+- [ ] 🔧 **Refactoring** (code changes that neither fix bugs nor add features)
+- [ ] 🧪 **Tests** (adding missing tests or correcting existing tests)
+- [ ] ⚡ **Performance** (changes that improve performance)
+- [ ] 🔒 **Security** (changes that fix security vulnerabilities)
 
-**Wie:** <!-- Wie wurde das Problem gelöst? -->
+## 🧪 Testing
+<!-- How has this been tested? -->
+- [ ] **Unit tests pass locally** (`python -m pytest tests/unit/`)
+- [ ] **Integration tests pass** (`python -m pytest tests/integration/`)
+- [ ] **Performance tests pass** (`python -m pytest tests/performance/`)
+- [ ] **Manual testing completed** (describe below)
+- [ ] **Edge cases tested** (error handling, boundary conditions)
 
-## 🔄 Art der Änderung
-<!-- Markiere zutreffende Optionen -->
-- [ ] 🐛 **Bug fix** (nicht-breaking change, der ein Problem behebt)
-- [ ] ✨ **Neue Feature** (nicht-breaking change, der Funktionalität hinzufügt)
-- [ ] 💥 **Breaking change** (Fix oder Feature, der bestehende Funktionalität bricht)
-- [ ] 📚 **Documentation** (keine Code-Änderungen)
-- [ ] 🔧 **Refactoring** (Code-Verbesserungen ohne funktionale Änderungen)
-- [ ] ⚡ **Performance** (Leistungsverbesserungen)
-- [ ] 🧪 **Tests** (neue oder verbesserte Tests)
-
-## 🧪 Tests
-<!-- Beschreibe die Tests für deine Änderungen -->
-- [ ] **Unit tests** hinzugefügt/aktualisiert
-- [ ] **Integration tests** bestehen
-- [ ] **Performance tests** (falls relevant)
-- [ ] **Manual testing** durchgeführt
-
-### Test-Kommandos:
+### Manual Testing Details
+<!-- Describe any manual testing you performed -->
 ```bash
-# Tests die ausgeführt wurden
-pytest tests/test_xyz.py -v
-python cli.py test-scenario
+# Commands used for testing
+python cli.py classify sample.pdf --strategy semantic
+python -m bu_processor.pipeline --input data/ --output out/
 ```
 
-## ✅ Checklist
-<!-- Stelle sicher, dass alle Punkte erfüllt sind -->
+**Test Results**: ✅ All functionality works as expected
 
-### Code Quality:
-- [ ] **Black formatting** angewandt (`black src/ tests/`)
-- [ ] **Import sorting** mit isort (`isort src/ tests/`)
-- [ ] **Linting** mit flake8 bestanden (`flake8 src/ tests/`)
-- [ ] **Type hints** hinzugefügt (`mypy src/`)
-- [ ] **Docstrings** für neue/geänderte APIs
-- [ ] **Self-review** des Codes durchgeführt
+## 📝 Changes Made
 
-### Funktionalität:
-- [ ] **Backwards compatibility** gewährleistet (oder Breaking Change dokumentiert)
-- [ ] **Error handling** implementiert
-- [ ] **Logging** hinzugefügt (falls relevant)
-- [ ] **Configuration** erweitert (falls nötig)
+### ✅ Added
+<!-- New features, files, functionality -->
+- New semantic deduplication algorithm with SimHash
+- API endpoint for batch document processing: `POST /api/v1/batch`
+- Configuration validation for Pinecone settings
+- German language optimization for legal documents
 
-### Dokumentation:
-- [ ] **Code-Kommentare** in komplexem Code
-- [ ] **README** aktualisiert (falls nötig)
-- [ ] **API-Dokumentation** ergänzt
-- [ ] **CHANGELOG** aktualisiert (bei Features/Fixes)
+### 🔄 Changed
+<!-- Modified existing functionality -->
+- Improved PDF extraction performance by 40% through caching
+- Updated classification confidence threshold from 0.7 to 0.8
+- Refactored configuration system to use Pydantic BaseSettings
+- Enhanced error messages for better user experience
 
-### Tests & Performance:
-- [ ] **Alle Tests** bestehen lokal
-- [ ] **Performance** nicht verschlechtert
-- [ ] **Memory usage** berücksichtigt
+### 🗑️ Removed
+<!-- Deleted or deprecated functionality -->
+- Deprecated legacy PDF extraction method (PyPDF2 fallback)
+- Removed unused dependency: `old-library==1.2.3`
+- Cleaned up dead code in `src/legacy/`
 
-## 🔗 Verwandte Issues
-<!-- Verlinke verwandte Issues -->
-Fixes #XXX
-Closes #YYY
-Related to #ZZZ
+### 🔧 Fixed
+<!-- Bug fixes -->
+- Fixed memory leak in batch processing pipeline
+- Resolved GPU detection issues on Windows
+- Corrected chunk overlap calculation in semantic segmentation
 
-## 📊 Änderungs-Impact
-<!-- Bewerte den Impact deiner Änderungen -->
+## 🔍 Code Review Checklist
+<!-- Self-review checklist before requesting review -->
+- [ ] **Code Style**: Black, isort, flake8, mypy all pass
+- [ ] **Type Hints**: Added to all new public APIs
+- [ ] **Docstrings**: Added/updated Google-style docstrings
+- [ ] **Error Handling**: Proper exception handling with meaningful messages
+- [ ] **Logging**: Used structured logging instead of print statements
+- [ ] **Tests**: Added tests for new functionality
+- [ ] **Documentation**: Updated relevant documentation
+- [ ] **Performance**: No significant performance regression
+- [ ] **Security**: No sensitive data exposed, input validation added
+- [ ] **Backwards Compatibility**: No breaking changes (or properly documented)
 
-**Betroffene Komponenten:**
-- [ ] PDF-Extraktion
-- [ ] ML-Klassifikation  
-- [ ] Semantic Chunking
-- [ ] Vector Database (Pinecone)
-- [ ] API/Web Interface
-- [ ] CLI
-- [ ] Configuration System
-- [ ] Tests/CI
+## 📊 Performance Impact
+<!-- Describe any performance implications -->
+- **Memory Usage**: ↗️ +5% (due to caching)
+- **Processing Speed**: ↗️ +40% (optimized algorithms)
+- **API Response Time**: ↔️ No change
+- **Startup Time**: ↔️ No significant change
 
-**Performance Impact:**
-- [ ] Keine Auswirkungen
-- [ ] Verbesserte Performance
-- [ ] Potentielle Performance-Einbußen (dokumentiert)
+### Benchmarks
+<!-- Include before/after benchmarks if relevant -->
+```
+Before: PDF processing ~8.5s per document
+After:  PDF processing ~5.1s per document (40% improvement)
+```
 
-## 🧪 Test-Szenarien
-<!-- Beschreibe, wie deine Änderungen getestet werden können -->
+## 🔒 Security Considerations
+<!-- Any security implications of these changes -->
+- [ ] **Input Validation**: All user inputs are validated
+- [ ] **API Security**: No new security vulnerabilities introduced
+- [ ] **Data Privacy**: No sensitive data logged or exposed
+- [ ] **Dependencies**: No new dependencies with known vulnerabilities
+- [ ] **Secrets Management**: All secrets properly handled via environment variables
 
-1. **Standard Use Case:**
-   ```bash
-   python cli.py classify "test text"
-   ```
+## 📸 Screenshots/Examples
+<!-- For UI changes, include before/after screenshots -->
+<!-- For API changes, include example requests/responses -->
 
-2. **Edge Cases:**
-   ```bash
-   python cli.py process large_file.pdf
-   ```
+### Before
+<!-- Screenshot or example of old behavior -->
 
-3. **Integration:**
-   ```bash
-   python -m pytest tests/integration/
-   ```
+### After
+<!-- Screenshot or example of new behavior -->
 
-## 📸 Screenshots
-<!-- Falls UI-Änderungen: Before/After Screenshots -->
+## 🎮 Demo Commands
+<!-- Commands reviewers can run to test this PR -->
+```bash
+# Test the new feature
+python cli.py new-command --example-param value
 
-## 🚀 Deployment Notes
-<!-- Spezielle Anweisungen für das Deployment -->
-- [ ] **Migration scripts** erforderlich
-- [ ] **Environment variables** geändert
-- [ ] **Dependencies** aktualisiert
-- [ ] **Database changes** (falls relevant)
+# Test existing functionality still works
+python cli.py classify tests/fixtures/sample.pdf
 
-## 🔍 Review-Fokus
-<!-- Worauf sollten Reviewer besonders achten? -->
-- Bitte überprüft besonders: **[spezifische Bereiche]**
-- Performance-kritische Teile: **[Code-Abschnitte]**
-- Neue APIs: **[API-Änderungen]**
+# Run comprehensive tests
+python -m pytest tests/ -v --cov=src
+```
 
-## 💭 Offene Fragen
-<!-- Fragen oder Unsicherheiten, die du hast -->
-- [ ] Ist die API-Design optimal?
-- [ ] Sollten weitere Tests hinzugefügt werden?
-- [ ] Performance-Optimierungen notwendig?
+## 📝 Migration Guide
+<!-- For breaking changes, provide migration instructions -->
+<!-- Skip this section if no breaking changes -->
+
+### Breaking Changes
+- `old_function()` is now `new_function()`
+- Configuration key `OLD_KEY` renamed to `NEW_KEY`
+
+### Migration Steps
+```bash
+# 1. Update .env configuration
+sed -i 's/OLD_KEY/NEW_KEY/g' .env
+
+# 2. Update Python code
+# Replace: classifier.old_method()
+# With:    classifier.new_method()
+```
+
+## 📚 Documentation Updates
+<!-- List documentation that has been updated -->
+- [ ] **README.md**: Updated installation instructions
+- [ ] **API Documentation**: Added new endpoint documentation
+- [ ] **Wiki**: Created/updated relevant guides
+- [ ] **Inline Comments**: Added explanatory comments for complex logic
+- [ ] **Changelog**: Will be updated upon merge
+
+## 🔗 References
+<!-- Links to relevant external resources, RFCs, papers, etc. -->
+- [SimHash Algorithm Paper](https://example.com/simhash-paper)
+- [BERT for German Legal Text](https://example.com/german-bert)
+- [Pydantic BaseSettings Documentation](https://pydantic-docs.helpmanual.io/usage/settings/)
+
+## 👥 Reviewer Notes
+<!-- Special instructions or areas of focus for reviewers -->
+- **Focus Areas**: Pay special attention to the new deduplication logic
+- **Testing**: Please test with German legal documents if possible
+- **Performance**: Check memory usage with large PDFs
+- **Architecture**: Review if the new config structure fits well
+
+## 📝 Additional Notes
+<!-- Any other context, concerns, or information for reviewers -->
 
 ---
 
-<!-- 
-Für Reviewer:
-- Prüft den Code auf Lesbarkeit und Wartbarkeit
-- Achtet auf Performance-Implications
-- Testet kritische Pfade manuell
-- Überprüft Dokumentation und Kommentare
--->
+## ✅ Reviewer Checklist
+<!-- For reviewers to complete during review -->
+- [ ] **Functionality**: Code works as described
+- [ ] **Tests**: Adequate test coverage for changes
+- [ ] **Documentation**: Changes are documented
+- [ ] **Performance**: No significant performance regression
+- [ ] **Security**: No security concerns identified
+- [ ] **Architecture**: Changes fit well with existing codebase
+- [ ] **User Experience**: Changes improve or maintain UX quality
+
+---
+
+**🙏 Thank you for contributing to BU-Processor! Your effort helps make this tool better for everyone.**

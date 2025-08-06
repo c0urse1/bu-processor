@@ -48,79 +48,119 @@ Ein hochmoderner, KI-gestützter Pipeline für die automatische Analyse und Klas
 
 ### 📦 Installation
 ```bash
-# Repository klonen
-git clone https://github.com/yourusername/bu-processor.git
-cd bu-processor
+# One-liner Installation
+pip install . && cp .env.example .env && echo "✅ Ready to go!"
 
-# Dependencies installieren
-pip install .
-# oder für Development:
-pip install -e ".[dev]"
-
-# Environment-Datei setup
-cp .env.example .env && nano .env
+# Optional: Edit configuration
+nano .env  # Linux/Mac
+# notepad .env  # Windows
 ```
 
-### 🚀 Sofort starten (3 Befehle)
+### 🚀 Usage (2 Befehle)
 ```bash
-# 1. PDF klassifizieren
+# 1. Einzelnes PDF analysieren
 python -m bu_processor.pipeline --input data/sample.pdf --output out/
 
-# 2. Interactive Demo
-python cli.py demo
-
-# 3. Web Interface starten
-python cli.py web
-# 🌐 Dann: http://localhost:8000
+# 2. Kompletten Ordner verarbeiten
+python -m bu_processor.pipeline --input data/ --output out/ --batch
 ```
 
-### 💻 CLI Usage
+### 💻 CLI Power User
 ```bash
-# PDF verarbeiten
-python cli.py classify document.pdf semantic
+# Semantic Chunking + Klassifikation
+python cli.py classify document.pdf --strategy semantic --confidence 0.8
 
-# Batch-Verarbeitung
-python cli.py batch data/ comprehensive
+# Batch mit Fortschrittsanzeige
+python cli.py batch data/ --output results/ --progress
 
-# Chatbot starten
-python cli.py chat
+# Web Interface (Demo & API)
+python cli.py web --host 0.0.0.0 --port 8000
+# 🌐 Browser: http://localhost:8000
 
-# Alle Befehle anzeigen
-python cli.py
+# Interactive Chatbot
+python cli.py chat --model gpt-3.5-turbo
+
+# Alle verfügbaren Befehle
+python cli.py --help
 ```
 
-### 🐍 Python API
+### 🐍 Python API (Minimal)
 ```python
 from bu_processor.pipeline.classifier import RealMLClassifier
-from bu_processor.pipeline.pdf_extractor import ChunkingStrategy
 
-# Schneller Start
+# One-Shot Classification
 classifier = RealMLClassifier()
-result = classifier.classify_pdf(
-    "document.pdf",
-    chunking_strategy=ChunkingStrategy.SEMANTIC
-)
+result = classifier.classify_pdf("document.pdf")
 
-print(f"Kategorie: {result.category}")
-print(f"Confidence: {result.confidence:.2f}")
-print(f"Chunks: {len(result.chunks)}")
+print(f"📄 {result.category} ({result.confidence:.0%})")
+print(f"📊 {len(result.chunks)} chunks extracted")
 ```
 
-### 🔧 Erweiterte Konfiguration
+### 🐍 Python API (Erweitert)
+```python
+from bu_processor.pipeline.classifier import RealMLClassifier
+from bu_processor.pipeline.pdf_extractor import ChunkingStrategy, ContentType
+from bu_processor.core.config import get_config
+
+# Konfiguration laden
+config = get_config()
+print(f"🏗️ Environment: {config.environment.value}")
+
+# Classifier mit Custom Settings
+classifier = RealMLClassifier(
+    confidence_threshold=0.9,
+    use_gpu=True
+)
+
+# Fortgeschrittene Klassifikation
+result = classifier.classify_pdf(
+    "complex_document.pdf",
+    chunking_strategy=ChunkingStrategy.SEMANTIC,
+    content_type=ContentType.LEGAL_TEXT,
+    extract_metadata=True
+)
+
+# Detaillierte Ergebnisse
+print(f"📋 Kategorie: {result.category}")
+print(f"🎯 Confidence: {result.confidence:.3f}")
+print(f"📄 Seiten: {result.metadata.get('page_count', 'unbekannt')}")
+print(f"🧩 Chunks: {len(result.chunks)}")
+
+# Chunk-Details
+for i, chunk in enumerate(result.chunks[:3]):
+    print(f"  {i+1}. {chunk.content_type.value}: {chunk.text[:100]}...")
+```
+
+### 🔧 Development Setup
 ```bash
-# Development Setup
+# Komplettes Development Environment
+git clone https://github.com/yourusername/bu-processor.git
+cd bu-processor
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # venv\\Scripts\\activate   # Windows
+
 pip install -r requirements-dev.txt
 pre-commit install
+cp .env.example .env
 
-# Environment Variablen (.env)
+# Teste Installation
+python cli.py config  # Zeigt aktuelle Konfiguration
+python -m pytest tests/ -v  # Laufe Tests
+```
+
+### ⚙️ Environment Konfiguration (.env)
+```bash
+# Basis-Konfiguration (development)
 BU_PROCESSOR_ENVIRONMENT=development
 BU_PROCESSOR_ML_MODEL__MODEL_PATH=bert-base-german-cased
+BU_PROCESSOR_PDF_PROCESSING__MAX_PDF_SIZE_MB=50
 BU_PROCESSOR_VECTOR_DB__ENABLE_VECTOR_DB=false
-# Optional: PINECONE_API_KEY=your-key
-# Optional: OPENAI_API_KEY=your-key
+
+# Optional: Erweiterte Features
+# PINECONE_API_KEY=your-pinecone-key  # Vector Database
+# OPENAI_API_KEY=your-openai-key      # Chatbot
+# BU_PROCESSOR_API__SECRET_KEY=secure-secret-key
 ```
 
 ## 🏗️ Architektur

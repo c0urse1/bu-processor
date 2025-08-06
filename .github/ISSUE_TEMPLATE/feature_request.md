@@ -1,90 +1,93 @@
 ---
 name: ✨ Feature Request
-about: Schlage ein neues Feature oder eine Verbesserung vor
+about: Suggest a new feature for BU-Processor
 title: '[FEATURE] '
-labels: ['enhancement', 'needs-discussion']
+labels: ['enhancement', 'needs-triage']
 assignees: ''
-
 ---
 
-## 🎯 Feature Beschreibung
-<!-- Beschreibe das gewünschte Feature klar und präzise -->
+## 🎯 Feature Summary
+<!-- Brief, clear description of the feature you'd like to see -->
 
-## 💡 Motivation
-<!-- Welches Problem löst dieses Feature? -->
-**Ist dein Feature-Request mit einem Problem verbunden?**
-Ich bin frustriert wenn [...]
+## 💡 Motivation & Use Case
+<!-- Why is this feature needed? What problem does it solve? -->
+<!-- Describe the specific use case or workflow this would enable -->
 
-## 🛠️ Gewünschte Lösung
-<!-- Beschreibe die Lösung, die du dir vorstellst -->
+**Problem**: Currently, ...
+**Solution**: This feature would allow users to ...
+**Benefit**: This would improve ...
 
-## 🔄 Alternativen
-<!-- Welche alternativen Lösungen oder Features hast du betrachtet? -->
+## 📋 Detailed Description
+<!-- Detailed explanation of the feature and how it should work -->
 
-## 📋 Akzeptanz-Kriterien
-<!-- Wann ist das Feature erfolgreich implementiert? -->
-- [ ] Feature macht X
-- [ ] Feature ist kompatibel mit Y
-- [ ] Feature hat Tests
-- [ ] Feature ist dokumentiert
+### Expected Behavior
+<!-- What should happen when this feature is used? -->
 
-## 📊 Implementierungsvorschlag
-<!-- Falls du Ideen zur technischen Umsetzung hast -->
-
-### Betroffene Komponenten:
-- [ ] PDF-Extraktion
-- [ ] ML-Klassifikation
-- [ ] Semantic Chunking
-- [ ] Vector Database
-- [ ] API/Web Interface
-- [ ] CLI
-- [ ] Configuration
-- [ ] Tests
-
-### Komplexität:
-- [ ] Niedrig (wenige Stunden)
-- [ ] Medium (1-2 Tage)
-- [ ] Hoch (mehrere Tage)
-- [ ] Sehr hoch (Refactoring erforderlich)
-
-## 📈 Impact & Priorität
-<!-- Wie wichtig ist dieses Feature? -->
-
-**Business Value:**
-- [ ] Kritisch für Produktivität
-- [ ] Wichtige Verbesserung
-- [ ] Nice-to-have
-
-**User Impact:**
-- [ ] Alle Nutzer betroffen
-- [ ] Erweiterte Nutzer
-- [ ] Entwickler/Admins
-
-## 🖼️ Mockups/Screenshots
-<!-- Falls anwendbar, Screenshots, Wireframes oder Code-Beispiele hinzufügen -->
-
-```python
-# Beispiel-API für das neue Feature
-result = processor.new_feature(
-    input_data="example",
-    feature_options={"advanced": True}
-)
+### User Experience
+<!-- How would users interact with this feature? -->
+```bash
+# Example command or API usage
+python cli.py new-feature --option value
 ```
 
-## 🧪 Test-Szenarien
-<!-- Wie könnte man das Feature testen? -->
-1. Test-Szenario 1: ...
-2. Test-Szenario 2: ...
+```python
+# Example Python API usage
+from bu_processor.new_module import NewFeature
 
-## 📚 Dokumentations-Bedarf
-- [ ] README Update erforderlich
-- [ ] API-Dokumentation
-- [ ] Tutorial/Beispiele
-- [ ] Configuration Guide
+feature = NewFeature()
+result = feature.process(data)
+```
 
-## 🔗 Verwandte Issues/PRs
-<!-- Verlinke ähnliche oder verwandte Issues -->
+## 🎨 Implementation Ideas
+<!-- Any ideas on how this could be implemented? (optional) -->
 
-## 🏷️ Labels
-<!-- Automatisch gesetzt, kann bei Bedarf angepasst werden -->
-/label ~enhancement ~needs-discussion
+### Technical Approach
+<!-- Suggested implementation approach -->
+- [ ] API changes needed
+- [ ] New ML model required
+- [ ] Database schema updates
+- [ ] Configuration changes
+- [ ] UI modifications
+
+### Alternatives Considered
+<!-- What other approaches have you considered? Why did you prefer this one? -->
+
+## 📊 Additional Context
+
+### **Priority Level**
+- [ ] 🔴 Critical - Blocks current workflows
+- [ ] 🟡 High - Significantly improves workflows
+- [ ] 🟢 Medium - Nice to have enhancement
+- [ ] 🔵 Low - Future consideration
+
+### **Complexity Estimate**
+- [ ] 🟢 Simple - Few hours of work
+- [ ] 🟡 Medium - 1-2 days of work
+- [ ] 🟠 Complex - 1+ weeks of work
+- [ ] 🔴 Major - Requires significant architecture changes
+
+### **Feature Category**
+- [ ] 🧠 **ML/AI**: Machine Learning, Models, Algorithms
+- [ ] 📄 **PDF Processing**: Extraction, Parsing, Text Analysis
+- [ ] 🌐 **API**: REST API, Endpoints, Integration
+- [ ] 💻 **CLI**: Command Line Interface, User Experience
+- [ ] 🔧 **Configuration**: Settings, Environment Management
+- [ ] 📊 **Performance**: Speed, Memory, Scalability
+- [ ] 🔒 **Security**: Authentication, Validation, Safety
+- [ ] 📚 **Documentation**: Examples, Guides, Help
+
+## 🖼️ Mockups/Examples
+<!-- Screenshots, diagrams, or examples of the desired feature (optional) -->
+
+## 🔗 Related Issues
+<!-- Link to related issues, discussions, or external resources -->
+- Related to #123
+- Similar to #456
+- External resource: https://example.com/relevant-article
+
+## ✅ Pre-submission Checklist
+- [ ] I have searched existing issues and feature requests
+- [ ] This is not a duplicate request
+- [ ] I have provided sufficient detail and context
+- [ ] I have considered the impact on existing users
+- [ ] I understand this is a request, not a guarantee
