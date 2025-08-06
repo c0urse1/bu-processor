@@ -221,7 +221,11 @@ class VectorOnlyStrategy:
 
 # Strategy Factory
 class StrategyFactory:
-    """Factory für Processing Strategies"""
+    """Factory für Processing Strategies.
+    
+    Zentrale Factory-Klasse für die Erstellung verschiedener
+    Verarbeitungsstrategien mit Validierung.
+    """
     
     _strategies = {
         "fast": FastStrategy,
@@ -232,6 +236,17 @@ class StrategyFactory:
     
     @classmethod
     def create_strategy(cls, strategy_name: str) -> ProcessingStrategy:
+        """Erstellt eine Verarbeitungsstrategie nach Name.
+        
+        Args:
+            strategy_name: Name der gewünschten Strategie
+            
+        Returns:
+            Konfigurierte ProcessingStrategy-Instanz
+            
+        Raises:
+            ValueError: Bei unbekanntem Strategy-Namen
+        """
         if strategy_name not in cls._strategies:
             raise ValueError(f"Unknown strategy: {strategy_name}. Available: {list(cls._strategies.keys())}")
         
@@ -239,6 +254,11 @@ class StrategyFactory:
     
     @classmethod
     def list_strategies(cls) -> List[str]:
+        """Gibt alle verfügbaren Strategy-Namen zurück.
+        
+        Returns:
+            Liste aller registrierten Strategy-Namen
+        """
         return list(cls._strategies.keys())
 
 # ============================================================================
@@ -305,14 +325,33 @@ class PipelineResult:
 # ============================================================================
 
 class EnhancedIntegratedPipeline:
-    """Refactored Pipeline mit Single Responsibility und Strategy Pattern"""
+    """Refactored Pipeline mit Single Responsibility und Strategy Pattern.
+    
+    Diese Klasse orchestriert die gesamte Dokumentverarbeitungs-Pipeline mit
+    konfigurierbaren Strategien, asynchroner Verarbeitung und robustem Error Handling.
+    
+    Attributes:
+        default_strategy: Standard-Verarbeitungsstrategie
+        pdf_extractor: PDF-Text-Extraktor
+        classifier: ML-Klassifizierer
+        semantic_enhancer: Semantischer Enhancer (optional)
+        pinecone_pipeline: Vector-Database Pipeline (optional)
+        executor: Thread Pool für parallele Verarbeitung
+    """
     
     def __init__(
         self,
         model_path: Optional[str] = None,
-        pinecone_config: Optional[Dict] = None,
+        pinecone_config: Optional[Dict[str, Any]] = None,
         default_strategy: str = "balanced"
-    ):
+    ) -> None:
+        """Initialisiert die Enhanced Integrated Pipeline.
+        
+        Args:
+            model_path: Optionaler Pfad zum ML-Model
+            pinecone_config: Optionale Pinecone-Konfiguration
+            default_strategy: Standard-Verarbeitungsstrategie
+        """
         self.default_strategy = default_strategy
         
         # Initialize Components
@@ -375,9 +414,25 @@ class EnhancedIntegratedPipeline:
         self,
         file_path: Union[str, Path],
         strategy: Optional[str] = None,
-        custom_config: Optional[Dict] = None
+        custom_config: Optional[Dict[str, Any]] = None
     ) -> PipelineResult:
-        """Hauptmethode: Dokumentenverarbeitung mit Strategy Pattern"""
+        """Hauptmethode: Dokumentenverarbeitung mit Strategy Pattern.
+        
+        Verarbeitet ein einzelnes Dokument durch die komplette Pipeline mit
+        konfigurierbarer Strategie und Custom-Konfiguration.
+        
+        Args:
+            file_path: Pfad zum zu verarbeitenden Dokument
+            strategy: Verarbeitungsstrategie ('fast', 'balanced', 'comprehensive')
+            custom_config: Optionale Custom-Konfiguration
+            
+        Returns:
+            PipelineResult mit allen Verarbeitungsergebnissen
+            
+        Raises:
+            ValueError: Bei ungültigen Konfigurationen
+            ValidationError: Bei Pydantic-Validierungsfehlern
+        """
         
         start_time = time.time()
         file_path = Path(file_path)
@@ -481,10 +536,23 @@ class EnhancedIntegratedPipeline:
         self,
         file_paths: List[Union[str, Path]],
         strategy: Optional[str] = None,
-        custom_config: Optional[Dict] = None,
+        custom_config: Optional[Dict[str, Any]] = None,
         max_concurrent: int = 4
     ) -> List[PipelineResult]:
-        """Asynchrone Verarbeitung mehrerer Dokumente"""
+        """Asynchrone Verarbeitung mehrerer Dokumente.
+        
+        Verarbeitet mehrere Dokumente parallel mit konfigurierbarer Concurrency
+        und einheitlicher Strategie.
+        
+        Args:
+            file_paths: Liste von Dateipfaden
+            strategy: Verarbeitungsstrategie für alle Dokumente
+            custom_config: Custom-Konfiguration für alle Dokumente
+            max_concurrent: Maximale Anzahl paralleler Verarbeitungen
+            
+        Returns:
+            Liste von PipelineResult-Objekten
+        """
         
         logger.info("Asynchrone Batch-Verarbeitung gestartet",
                    files_count=len(file_paths),
@@ -1049,11 +1117,18 @@ class EnhancedIntegratedPipeline:
             return base_config
     
     def get_available_strategies(self) -> List[str]:
-        """Gibt verfügbare Strategien zurück"""
+        """Gibt alle verfügbaren Verarbeitungsstrategien zurück.
+        
+        Returns:
+            Liste von Strategy-Namen
+        """
         return StrategyFactory.list_strategies()
     
-    def cleanup(self):
-        """Cleanup resources"""
+    def cleanup(self) -> None:
+        """Räumt Ressourcen auf.
+        
+        Beendet Thread Pool und andere Ressourcen ordnungsgemäß.
+        """
         if hasattr(self, 'executor'):
             self.executor.shutdown(wait=True)
 
@@ -1061,8 +1136,16 @@ class EnhancedIntegratedPipeline:
 # DEMO FUNCTION
 # ============================================================================
 
-async def demo_refactored_pipeline():
-    """Demo der refactored Pipeline"""
+async def demo_refactored_pipeline() -> None:
+    """Demo der refactored Pipeline mit verschiedenen Strategien.
+    
+    Demonstriert:
+    - Verschiedene Verarbeitungsstrategien
+    - Einzeldokument-Verarbeitung
+    - Asynchrone Batch-Verarbeitung
+    - Performance-Metriken
+    - Error Handling
+    """
     
     # Setup demo logger
     demo_logger = structlog.get_logger("pipeline.demo")

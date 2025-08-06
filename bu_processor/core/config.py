@@ -14,13 +14,17 @@ KEY IMPROVEMENTS:
 - Sensible Defaults: Entwickler-freundliche Standardwerte
 """
 
+import logging
 import os
+import yaml
 from pathlib import Path
 from typing import List, Optional, Literal, Dict, Any, Union
 from enum import Enum
 
 from pydantic import BaseSettings, Field, validator, root_validator
 from pydantic.types import PositiveInt, PositiveFloat, DirectoryPath
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # ENUMS FÜR TYPE SAFETY
@@ -86,22 +90,16 @@ class MLModelConfig(BaseSettings):
     @validator('model_path')
     def validate_model_path(cls, v):
         """Überprüfe ob Model-Pfad existiert oder erstellt werden kann"""
-        import structlog
-        logger = structlog.get_logger("config.validator")
-        
         path = Path(v)
         if not path.exists():
             # Erstelle Verzeichnis falls nicht vorhanden
             path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info("Model-Pfad erstellt", path=str(path.parent))
+            logger.info(f"Model-Pfad erstellt: {path.parent}")
         return v
     
     @validator('sentence_transformer_model')
     def validate_sentence_transformer_model(cls, v):
         """Validiere Sentence Transformer Model Name"""
-        import structlog
-        logger = structlog.get_logger("config.validator")
-        
         # Gültige Modell-Präfixe und bekannte Modelle
         valid_prefixes = [
             'sentence-transformers/',
@@ -124,10 +122,9 @@ class MLModelConfig(BaseSettings):
         # Prüfe ob Modell bekannt ist oder gültiges Präfix hat
         if v not in known_models and not any(v.startswith(prefix) for prefix in valid_prefixes):
             logger.warning(
-                "Unbekanntes Sentence Transformer Modell",
-                model=v,
-                known_models=known_models[:3],  # Zeige nur erste 3
-                suggestion="Verwende bekannte Modelle oder prüfe Verfügbarkeit"
+                f"Unbekanntes Sentence Transformer Modell: {v}. "
+                f"Bekannte Modelle: {known_models[:3]}. "
+                f"Verwende bekannte Modelle oder prüfe Verfügbarkeit."
             )
             # Warnung aber kein Fehler - Modell könnte trotzdem funktionieren
         
@@ -267,9 +264,7 @@ class APIConfig(BaseSettings):
             # Warne vor offensichtlich unsicheren Keys
             weak_keys = ['12345678', 'password', 'apikey123', 'test1234', 'development']
             if v.lower() in weak_keys:
-                import structlog
-                logger = structlog.get_logger("config.validator")
-                logger.warning("Schwacher API Key erkannt", key_start=v[:3])
+                logger.warning(f"Schwacher API Key erkannt, beginnt mit: {v[:3]}...")
         
         return v
 
@@ -519,7 +514,22 @@ class OpenAIConfig(BaseSettings):
 # ============================================================================
 
 class BUProcessorConfig(BaseSettings):
-    """Hauptkonfiguration für BU-Processor mit Environment-Management"""
+    """Hauptkonfiguration für BU-Processor mit Environment-Management.
+    
+    Diese Klasse verwendet Pydantic BaseSettings für automatisches Laden
+    von Environment-Variablen, Validierung und typisierte Konfiguration.
+    
+    Attributes:
+        environment: Aktuelles Deployment-Environment
+        debug: Debug-Modus aktiviert
+        log_level: Globales Logging-Level
+        ml_model: ML-Model spezifische Konfiguration
+        pdf_processing: PDF-Verarbeitung Konfiguration
+        api: API und Webservice Konfiguration
+        vector_db: Vector Database Konfiguration
+        semantic: Semantische Verarbeitung Konfiguration
+        deduplication: Deduplication Konfiguration
+    """
     
     # Environment Settings
     environment: Environment = Field(
@@ -574,8 +584,6 @@ class BUProcessorConfig(BaseSettings):
             # Zusätzliche Production-Validierung
             api_config = values.get('api')
             if api_config and not api_config.secret_key:
-                import structlog
-                logger = structlog.get_logger("config.validator")
                 logger.warning("Production ohne SECRET_KEY - bitte setzen für sichere Sessions")
         
         elif env == Environment.STAGING:
@@ -607,15 +615,30 @@ class BUProcessorConfig(BaseSettings):
         return v
     
     def get_cache_dir(self) -> Path:
-        """Gibt vollständigen Cache-Pfad zurück"""
+        """Gibt vollständigen Cache-Pfad zurück.
+        
+        Returns:
+            Absoluter Pfad zum Cache-Verzeichnis
+        """
         return Path(self.pdf_processing.cache_dir).resolve()
     
     def get_model_dir(self) -> Path:
-        """Gibt vollständigen Model-Pfad zurück"""
+        """Gibt vollständigen Model-Pfad zurück.
+        
+        Returns:
+            Absoluter Pfad zum Model-Verzeichnis
+        """
         return Path(self.ml_model.model_path).parent.resolve()
     
     def is_feature_enabled(self, feature: str) -> bool:
-        """Prüft ob ein Feature aktiviert ist"""
+        """Prüft ob ein Feature aktiviert ist.
+        
+        Args:
+            feature: Feature-Name zu prüfen
+            
+        Returns:
+            True wenn Feature aktiviert ist
+        """
         feature_map = {
             "vector_db": self.vector_db.enable_vector_db,
             "chatbot": self.openai.enable_chatbot,
@@ -628,7 +651,11 @@ class BUProcessorConfig(BaseSettings):
         return feature_map.get(feature, False)
     
     def get_environment_info(self) -> Dict[str, Any]:
-        """Gibt Environment-Informationen zurück"""
+        """Gibt detaillierte Environment-Informationen zurück.
+        
+        Returns:
+            Dict mit Environment-Details und aktivierten Features
+        """
         return {
             "environment": self.environment.value,
             "debug": self.debug,
@@ -643,6 +670,44 @@ class BUProcessorConfig(BaseSettings):
                 "semantic_deduplication": self.is_feature_enabled("semantic_deduplication")
             }
         }
+    
+    @classmethod
+    def parse_yaml(cls, path: str = "config.yaml") -> 'BUProcessorConfig':
+        """Lädt Konfiguration aus YAML-Datei.
+        
+        Args:
+            path: Pfad zur YAML-Konfigurationsdatei
+            
+        Returns:
+            BUProcessorConfig-Instanz mit YAML-Werten
+            
+        Raises:
+            FileNotFoundError: Falls YAML-Datei nicht gefunden
+            ValueError: Bei ungültigen YAML-Inhalten
+        """
+        try:
+            yaml_path = Path(path)
+            if not yaml_path.is_absolute():
+                # Relativer Pfad vom Projektroot
+                project_root = Path(__file__).parent.parent.parent
+                yaml_path = project_root / path
+            
+            if not yaml_path.exists():
+                raise FileNotFoundError(f"YAML-Konfigurationsdatei nicht gefunden: {yaml_path}")
+            
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            
+            if not data:
+                raise ValueError("YAML-Datei ist leer oder ungültig")
+            
+            # Erstelle Instanz mit YAML-Daten
+            return cls(**data)
+            
+        except yaml.YAMLError as e:
+            raise ValueError(f"Ungültige YAML-Syntax: {e}")
+        except Exception as e:
+            raise ValueError(f"Fehler beim Laden der YAML-Konfiguration: {e}")
     
     class Config:
         # Environment-Variable Prefixes
@@ -665,43 +730,84 @@ class BUProcessorConfig(BaseSettings):
 
 def create_config(
     environment: Optional[str] = None,
-    config_file: Optional[str] = None
+    config_file: Optional[str] = None,
+    use_yaml: bool = True
 ) -> BUProcessorConfig:
-    """Factory für Konfiguration mit optionalem Environment Override"""
+    """Factory-Funktion für Konfigurationserstellung mit Environment-Override.
     
-    # Setup logger
-    import structlog
-    logger = structlog.get_logger("config.factory")
+    Args:
+        environment: Optional environment override ('development', 'staging', 'production')
+        config_file: Optional Pfad zur .env-Datei
+        use_yaml: Ob config.yaml geladen werden soll (falls vorhanden)
+        
+    Returns:
+        Validierte BUProcessorConfig-Instanz
+        
+    Raises:
+        ValidationError: Bei ungültigen Konfigurationsparametern
+    """
+    
+    # Setup for config factory
     
     # Environment aus Parameter oder ENV-Variable
     if environment:
         os.environ["BU_PROCESSOR_ENVIRONMENT"] = environment
     
-    # Config file Override
-    env_file = config_file or ".env"
-    
     try:
+        # Versuche zuerst YAML zu laden falls aktiviert
+        if use_yaml:
+            yaml_path = Path("config.yaml")
+            if not yaml_path.is_absolute():
+                project_root = Path(__file__).parent.parent.parent
+                yaml_path = project_root / "config.yaml"
+            
+            if yaml_path.exists():
+                logger.info(f"Lade Konfiguration aus YAML: {yaml_path}")
+                config = BUProcessorConfig.parse_yaml(str(yaml_path))
+                
+                logger.info(
+                    f"YAML-Konfiguration erfolgreich geladen - "
+                    f"Environment: {config.environment.value}, "
+                    f"Log Level: {config.log_level.value}, "
+                    f"Source: yaml"
+                )
+                return config
+            else:
+                logger.info("Keine config.yaml gefunden, fallback zu .env")
+        
+        # Fallback zu .env-basierter Konfiguration
+        env_file = config_file or ".env"
         config = BUProcessorConfig(_env_file=env_file)
         
-        logger.info("Konfiguration erfolgreich geladen",
-                   environment=config.environment.value,
-                   log_level=config.log_level.value,
-                   vector_db_enabled=config.is_feature_enabled('vector_db'),
-                   chatbot_enabled=config.is_feature_enabled('chatbot'),
-                   semantic_enabled=config.is_feature_enabled('semantic_clustering'),
-                   deduplication_enabled=config.is_feature_enabled('semantic_deduplication'))
+        logger.info(
+            f"Konfiguration erfolgreich geladen - "
+            f"Environment: {config.environment.value}, "
+            f"Log Level: {config.log_level.value}, "
+            f"Vector DB: {config.is_feature_enabled('vector_db')}, "
+            f"Chatbot: {config.is_feature_enabled('chatbot')}, "
+            f"Semantic: {config.is_feature_enabled('semantic_clustering')}, "
+            f"Deduplication: {config.is_feature_enabled('semantic_deduplication')}, "
+            f"Source: env"
+        )
         
         return config
     
     except Exception as e:
-        logger.error("Konfigurationsfehler", error=str(e))
+        logger.error(f"Konfigurationsfehler: {e}")
         logger.info("Fallback zu Development-Konfiguration")
         
         # Fallback zu minimaler Development-Konfiguration
         return BUProcessorConfig(environment=Environment.DEVELOPMENT)
 
 def validate_config(config: BUProcessorConfig) -> List[str]:
-    """Validiert Konfiguration und gibt Liste von Problemen zurück"""
+    """Validiert BU-Processor Konfiguration und sammelt Probleme.
+    
+    Args:
+        config: Zu validierende Konfiguration
+        
+    Returns:
+        Liste von Fehlermeldungen/Warnungen (leer wenn alles OK)
+    """
     
     issues = []
     
@@ -744,26 +850,21 @@ def validate_config(config: BUProcessorConfig) -> List[str]:
 # GLOBAL CONFIGURATION INSTANCE
 # ============================================================================
 
-# Automatische Konfiguration beim Import
+# Automatische Konfiguration beim Import mit YAML-Support
 try:
-    settings = create_config()
-    
-    # Setup logger für Validierung
-    import structlog
-    validation_logger = structlog.get_logger("config.validation")
+    # Versuche YAML zu laden, fallback zu .env
+    settings = create_config(use_yaml=True)
     
     # Validierung
     config_issues = validate_config(settings)
     if config_issues:
-        validation_logger.warning("Konfigurationswarnungen gefunden", issues=config_issues)
+        logger.warning(f"Konfigurationswarnungen gefunden: {config_issues}")
     else:
-        validation_logger.info("Konfiguration erfolgreich validiert")
+        logger.info("Konfiguration erfolgreich validiert")
 
 except Exception as e:
-    # Fallback logging ohne strukturlog
-    import logging
-    fallback_logger = logging.getLogger("config")
-    fallback_logger.error(f"Kritischer Konfigurationsfehler: {e}")
+    # Fallback logging
+    logger.error(f"Kritischer Konfigurationsfehler: {e}")
     
     # Fallback zu minimaler Konfiguration
     settings = BUProcessorConfig(environment=Environment.DEVELOPMENT)
@@ -819,11 +920,22 @@ ENV = settings.environment.value
 config = settings
 
 def get_config() -> BUProcessorConfig:
-    """Gibt aktuelle Konfiguration zurück"""
+    """Gibt die aktuelle globale Konfiguration zurück.
+    
+    Returns:
+        Aktuelle BUProcessorConfig-Instanz
+    """
     return settings
 
 def reload_config(environment: Optional[str] = None) -> BUProcessorConfig:
-    """Lädt Konfiguration neu"""
+    """Lädt die Konfiguration neu mit optionalem Environment-Override.
+    
+    Args:
+        environment: Optional neues Environment
+        
+    Returns:
+        Neu geladene BUProcessorConfig-Instanz
+    """
     global settings
     settings = create_config(environment)
     return settings
@@ -832,21 +944,24 @@ def reload_config(environment: Optional[str] = None) -> BUProcessorConfig:
 # DEMO FUNCTION
 # ============================================================================
 
-def demo_config():
-    """Demo der modernen Konfiguration - sicher ohne eval()"""
+def demo_config() -> None:
+    """Demo der modernen Pydantic-basierten Konfiguration.
     
-    # Setup demo logger
-    import structlog
-    demo_logger = structlog.get_logger("config.demo")
+    Demonstriert:
+    - Environment-spezifische Konfiguration
+    - Feature-Flags und Pfad-Validierung
+    - Konfigurationsvalidierung
+    - Performance und Sicherheitseinstellungen
+    """
     
-    demo_logger.info("BU-Processor Configuration Demo gestartet")
+    logger.info("BU-Processor Configuration Demo gestartet")
     
     # Zeige aktuelle Konfiguration
     env_info = settings.get_environment_info()
-    demo_logger.info("Environment Info", **env_info)
+    logger.info(f"Environment Info: {env_info}")
     
     # Teste verschiedene Environments - sicher ohne eval()
-    demo_logger.info("Testing Different Environments")
+    logger.info("Testing Different Environments")
     
     environments = {
         "development": Environment.DEVELOPMENT,
@@ -855,26 +970,30 @@ def demo_config():
     }
     
     for env_name, env_enum in environments.items():
-        demo_logger.info(f"Testing {env_name.upper()} environment")
+        logger.info(f"Testing {env_name.upper()} environment")
         try:
             test_config = create_config(environment=env_name)
             
-            demo_logger.info(f"{env_name.upper()} config",
-                            debug=test_config.debug,
-                            log_level=test_config.log_level.value,
-                            max_pdf_size=f"{test_config.pdf_processing.max_pdf_size_mb}MB",
-                            batch_count=test_config.pdf_processing.max_batch_pdf_count,
-                            cache_enabled=test_config.pdf_processing.enable_cache)
+            logger.info(
+                f"{env_name.upper()} config - "
+                f"Debug: {test_config.debug}, "
+                f"Log Level: {test_config.log_level.value}, "
+                f"Max PDF Size: {test_config.pdf_processing.max_pdf_size_mb}MB, "
+                f"Batch Count: {test_config.pdf_processing.max_batch_pdf_count}, "
+                f"Cache Enabled: {test_config.pdf_processing.enable_cache}"
+            )
         except Exception as e:
-            demo_logger.error(f"Fehler beim Testen von {env_name}", error=str(e))
+            logger.error(f"Fehler beim Testen von {env_name}: {e}")
     
     # Zeige Pfade
     try:
-        demo_logger.info("Wichtige Pfade",
-                        cache_dir=str(settings.get_cache_dir()),
-                        model_dir=str(settings.get_model_dir()))
+        logger.info(
+            f"Wichtige Pfade - "
+            f"Cache Dir: {settings.get_cache_dir()}, "
+            f"Model Dir: {settings.get_model_dir()}"
+        )
     except Exception as e:
-        demo_logger.error("Fehler beim Laden der Pfade", error=str(e))
+        logger.error(f"Fehler beim Laden der Pfade: {e}")
     
     # Zeige Features - sichere Iteration
     feature_list = ["vector_db", "chatbot", "cache", "gpu", "metadata_extraction", "semantic_clustering", "semantic_deduplication"]
@@ -884,22 +1003,22 @@ def demo_config():
         try:
             feature_status[feature] = settings.is_feature_enabled(feature)
         except Exception as e:
-            demo_logger.warning(f"Fehler beim Prüfen von Feature {feature}", error=str(e))
+            logger.warning(f"Fehler beim Prüfen von Feature {feature}: {e}")
             feature_status[feature] = False
     
-    demo_logger.info("Feature Status", **feature_status)
+    logger.info(f"Feature Status: {feature_status}")
     
     # Validierungscheck
     try:
         issues = validate_config(settings)
         if issues:
-            demo_logger.warning("Konfigurationsprobleme gefunden", issues=issues)
+            logger.warning(f"Konfigurationsprobleme gefunden: {issues}")
         else:
-            demo_logger.info("Keine Konfigurationsprobleme gefunden")
+            logger.info("Keine Konfigurationsprobleme gefunden")
     except Exception as e:
-        demo_logger.error("Fehler bei Konfigurationsvalidierung", error=str(e))
+        logger.error(f"Fehler bei Konfigurationsvalidierung: {e}")
     
-    demo_logger.info("Configuration Demo completed!")
+    logger.info("Configuration Demo completed!")
 
 if __name__ == "__main__":
     demo_config()

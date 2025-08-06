@@ -46,52 +46,81 @@ Ein hochmoderner, KI-gestützter Pipeline für die automatische Analyse und Klas
 
 ## ⚡ Quick Start
 
-### 1. Repository klonen
+### 📦 Installation
 ```bash
+# Repository klonen
 git clone https://github.com/yourusername/bu-processor.git
 cd bu-processor
-```
-
-### 2. Environment einrichten
-```bash
-# Virtual Environment erstellen
-python -m venv venv
-
-# Aktivieren (Windows)
-venv\\Scripts\\activate
-# Aktivieren (Linux/Mac)
-source venv/bin/activate
 
 # Dependencies installieren
-pip install -r requirements.txt
+pip install .
+# oder für Development:
+pip install -e ".[dev]"
+
+# Environment-Datei setup
+cp .env.example .env && nano .env
 ```
 
-### 3. Konfiguration
+### 🚀 Sofort starten (3 Befehle)
 ```bash
-# Environment-Datei kopieren
-cp .env.example .env
+# 1. PDF klassifizieren
+python -m bu_processor.pipeline --input data/sample.pdf --output out/
 
-# .env nach Bedarf anpassen
-# Mindestens ML_MODEL_PATH setzen
+# 2. Interactive Demo
+python cli.py demo
+
+# 3. Web Interface starten
+python cli.py web
+# 🌐 Dann: http://localhost:8000
 ```
 
-### 4. Erste Schritte
+### 💻 CLI Usage
+```bash
+# PDF verarbeiten
+python cli.py classify document.pdf semantic
+
+# Batch-Verarbeitung
+python cli.py batch data/ comprehensive
+
+# Chatbot starten
+python cli.py chat
+
+# Alle Befehle anzeigen
+python cli.py
+```
+
+### 🐍 Python API
 ```python
-from src.pipeline.classifier import RealMLClassifier
-from src.pipeline.pdf_extractor import EnhancedPDFExtractor, ChunkingStrategy
+from bu_processor.pipeline.classifier import RealMLClassifier
+from bu_processor.pipeline.pdf_extractor import ChunkingStrategy
 
-# Classifier initialisieren
+# Schneller Start
 classifier = RealMLClassifier()
-
-# PDF analysieren
 result = classifier.classify_pdf(
-    \"path/to/document.pdf\",
+    "document.pdf",
     chunking_strategy=ChunkingStrategy.SEMANTIC
 )
 
-print(f\"Kategorie: {result.category}\")
-print(f\"Confidence: {result.confidence:.3f}\")
-print(f\"Chunks: {len(result.chunks)}\")
+print(f"Kategorie: {result.category}")
+print(f"Confidence: {result.confidence:.2f}")
+print(f"Chunks: {len(result.chunks)}")
+```
+
+### 🔧 Erweiterte Konfiguration
+```bash
+# Development Setup
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# venv\\Scripts\\activate   # Windows
+pip install -r requirements-dev.txt
+pre-commit install
+
+# Environment Variablen (.env)
+BU_PROCESSOR_ENVIRONMENT=development
+BU_PROCESSOR_ML_MODEL__MODEL_PATH=bert-base-german-cased
+BU_PROCESSOR_VECTOR_DB__ENABLE_VECTOR_DB=false
+# Optional: PINECONE_API_KEY=your-key
+# Optional: OPENAI_API_KEY=your-key
 ```
 
 ## 🏗️ Architektur
@@ -126,10 +155,19 @@ BU_PROCESSOR_PDF_PROCESSING__MAX_PDF_SIZE_MB=50
 BU_PROCESSOR_VECTOR_DB__ENABLE_VECTOR_DB=false
 ```
 
-### Verfügbare Environments
-- **Development**: Maximale Features, Debug-Logging
-- **Staging**: Production-nah mit umfassendem Logging  
-- **Production**: Optimiert für Performance und Sicherheit
+### 🌍 Environment Management
+- **Development**: Maximale Features, Debug-Logging, alle Validierungen
+- **Staging**: Production-nah mit umfassendem Logging, Performance-Tests
+- **Production**: Optimiert für Performance, Security-hardened, minimales Logging
+
+```bash
+# Environment wechseln
+export BU_PROCESSOR_ENVIRONMENT=production
+# oder in .env: BU_PROCESSOR_ENVIRONMENT=production
+
+# Config überprüfen
+python cli.py config
+```
 
 ## 📊 Performance
 
@@ -265,17 +303,40 @@ docker-compose up -d
 
 ## 🤝 Contributing
 
-1. **Fork** das Repository
-2. **Feature Branch** erstellen (`git checkout -b feature/amazing-feature`)
-3. **Tests** schreiben und ausführen
-4. **Commit** mit aussagekräftiger Nachricht
-5. **Pull Request** erstellen
+**Wir freuen uns über Contributions!** Lies unser detailliertes [CONTRIBUTING.md](CONTRIBUTING.md) für alle Details.
 
-### Code Style
-- **Black** für Code-Formatierung
-- **Type Hints** für alle öffentlichen APIs
-- **Docstrings** im Google Style
-- **Pytest** für alle Tests
+### 🚀 Quick Contributor Setup
+```bash
+# 1. Fork & Clone
+git clone https://github.com/YOURUSERNAME/bu-processor.git
+cd bu-processor
+
+# 2. Development Environment
+pip install -r requirements-dev.txt
+pre-commit install
+
+# 3. Feature Branch
+git checkout -b feature/amazing-feature
+
+# 4. Code, Test, Commit
+black src/ tests/ && pytest tests/ -v
+git commit -m "feat: add amazing feature"
+git push origin feature/amazing-feature
+```
+
+### 📋 Contribution Areas
+- 🐛 **Bug Fixes**: [Good First Issues](https://github.com/yourusername/bu-processor/labels/good%20first%20issue)
+- ✨ **Features**: API Extensions, Performance, New Extractors
+- 📚 **Documentation**: Examples, Guides, API Docs
+- 🧪 **Tests**: Coverage, Integration, Performance
+- 🔧 **Refactoring**: Code Quality, Architecture
+
+### 📝 Issue & PR Templates
+Wir nutzen strukturierte Templates für bessere Zusammenarbeit:
+- 🐛 [Bug Report](.github/ISSUE_TEMPLATE/bug_report.md)
+- ✨ [Feature Request](.github/ISSUE_TEMPLATE/feature_request.md)
+- ❓ [Question/Support](.github/ISSUE_TEMPLATE/question.md)
+- 📝 [Pull Request Template](.github/pull_request_template.md)
 
 ## 📄 License
 
@@ -289,11 +350,26 @@ Dieses Projekt ist unter der **MIT License** lizenziert - siehe [LICENSE](LICENS
 - **PyMuPDF** für robuste PDF-Verarbeitung
 - **Pydantic** für typisierte Konfiguration
 
-## 📞 Support
+## 📞 Support & Community
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/bu-processor/issues)
-- **Dokumentation**: [Wiki](https://github.com/yourusername/bu-processor/wiki)
-- **Diskussionen**: [GitHub Discussions](https://github.com/yourusername/bu-processor/discussions)
+### 🆘 Hilfe bekommen
+- 🐛 **Bug Reports**: [Create Issue](https://github.com/yourusername/bu-processor/issues/new?template=bug_report.md)
+- ✨ **Feature Requests**: [Request Feature](https://github.com/yourusername/bu-processor/issues/new?template=feature_request.md)
+- ❓ **Questions**: [Ask Question](https://github.com/yourusername/bu-processor/issues/new?template=question.md)
+- 💬 **Diskussionen**: [GitHub Discussions](https://github.com/yourusername/bu-processor/discussions)
+
+### 📚 Ressourcen
+- 📖 **Wiki**: [Comprehensive Guides](https://github.com/yourusername/bu-processor/wiki)
+- 🎯 **Examples**: [Code Examples](examples/)
+- 🔧 **API Docs**: [docs.yourdomain.com](https://docs.yourdomain.com)
+- 📊 **Roadmap**: [Project Board](https://github.com/yourusername/bu-processor/projects)
+
+### 🏷️ Labels & Workflow
+- `good first issue` - Perfekt für neue Contributors
+- `help wanted` - Community Input erwünscht
+- `bug` - Bestätigte Bugs
+- `enhancement` - Feature Requests
+- `documentation` - Docs-Verbesserungen
 
 ---
 

@@ -1,15 +1,18 @@
-import fitz  # PyMuPDF
-import PyPDF2
-from pathlib import Path
-from typing import Dict, List, Optional, Union, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
-import unicodedata
+"""Erweiterte PDF-Text-Extraktion mit semantischem Chunking und OCR-Fallback."""
+
+import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import time
-import os
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
+
+import fitz  # PyMuPDF
+import PyPDF2
 
 # NEU: Import für OCR-Funktionalität
 try:
@@ -126,18 +129,38 @@ class ExtractedContent:
     text_cleaned: bool = False
 
 class ChunkingStrategy(Enum):
-    """Verfügbare Chunking-Strategien"""
+    """Verfügbare Chunking-Strategien.
+    
+    NONE: Kein Chunking, vollständiger Text
+    SIMPLE: Einfache Absatz-basierte Teilung
+    SEMANTIC: KI-basiertes semantisches Chunking
+    HYBRID: Kombination aus einfach + semantisch
+    BALANCED: Ausgewogene Strategie zwischen Performance und Qualität
+    """
+    
     NONE = "none"
-    SIMPLE = "simple"  # Einfache Absatz-basierte Teilung
-    SEMANTIC = "semantic"  # KI-basiertes semantisches Chunking
-    HYBRID = "hybrid"  # Kombination aus einfach + semantisch
+    SIMPLE = "simple"
+    SEMANTIC = "semantic"
+    HYBRID = "hybrid"
     BALANCED = "balanced"
 class TextCleaner:
-    """Utility class for text cleaning and normalization"""
+    """Utility-Klasse für Text-Bereinigung und Normalisierung.
+    
+    Bietet statische Methoden für Unicode-Normalisierung, Whitespace-Bereinigung
+    und Text-Qualitäts-Validierung.
+    """
     
     @staticmethod
     def clean_text(text: str, normalize_whitespace: bool = True) -> str:
-        """Comprehensive text cleaning with Unicode normalization"""
+        """Umfassende Text-Bereinigung mit Unicode-Normalisierung.
+        
+        Args:
+            text: Zu bereinigender Text
+            normalize_whitespace: Whitespace normalisieren
+            
+        Returns:
+            Bereinigter und normalisierter Text
+        """
         if not text:
             return ""
         
@@ -192,7 +215,15 @@ class TextCleaner:
     
     @staticmethod
     def validate_extracted_text(text: str, min_length: int = MIN_EXTRACTED_TEXT_LENGTH) -> bool:
-        """Validate if extracted text meets quality criteria"""
+        """Validiert ob extrahierter Text Qualitätskriterien erfüllt.
+        
+        Args:
+            text: Zu validierender Text
+            min_length: Minimale Textlänge
+            
+        Returns:
+            True wenn Text Qualitätskriterien erfüllt
+        """
         if not text or len(text.strip()) < min_length:
             return False
         
@@ -204,9 +235,33 @@ class TextCleaner:
         return True
 
 class EnhancedPDFExtractor:
-    """Erweiterte PDF-Text-Extraktion mit integriertem semantischem Chunking"""
+    """Erweiterte PDF-Text-Extraktion mit integriertem semantischem Chunking.
     
-    def __init__(self, prefer_method: str = None, enable_chunking: bool = True, max_workers: int = 4):
+    Diese Klasse bietet robuste PDF-Text-Extraktion mit mehreren Fallback-Methoden,
+    OCR-Unterstützung und erweiterten Chunking-Strategien.
+    
+    Attributes:
+        prefer_method: Bevorzugte PDF-Extraktionsmethode
+        supported_methods: Liste aller unterstützten Extraktionsmethoden
+        enable_chunking: Ob Chunking-Funktionalität aktiviert ist
+        max_workers: Anzahl Worker-Threads für parallele Verarbeitung
+        text_cleaner: Text-Bereinigungsinstanz
+        semantic_enhancer: Semantisches Enhancement (optional)
+    """
+    
+    def __init__(
+        self, 
+        prefer_method: Optional[str] = None, 
+        enable_chunking: bool = True, 
+        max_workers: int = 4
+    ) -> None:
+        """Initialisiert den erweiterten PDF-Extraktor.
+        
+        Args:
+            prefer_method: Bevorzugte Extraktionsmethode ('pymupdf' oder 'pypdf2')
+            enable_chunking: Aktiviert semantisches Chunking
+            max_workers: Anzahl Worker-Threads für parallele Verarbeitung
+        """
         self.prefer_method = prefer_method or PDF_EXTRACTION_METHOD
         self.supported_methods = ["pymupdf", "pypdf2"]
         self.enable_chunking = enable_chunking
@@ -284,7 +339,25 @@ class EnhancedPDFExtractor:
         max_chunk_size: int = 1000,
         overlap_size: int = 100
     ) -> ExtractedContent:
-        """Hauptmethode für PDF-Text-Extraktion mit optionalem Chunking"""
+        """Hauptmethode für PDF-Text-Extraktion mit optionalem Chunking.
+        
+        Extrahiert Text aus PDF-Dateien mit konfigurierbaren Chunking-Strategien
+        und robustem Error Handling.
+        
+        Args:
+            pdf_path: Pfad zur PDF-Datei
+            chunking_strategy: Strategie für Text-Segmentierung
+            max_chunk_size: Maximale Zeichen pro Chunk
+            overlap_size: Überlappung zwischen Chunks in Zeichen
+            
+        Returns:
+            ExtractedContent mit Text, Chunks und Metadaten
+            
+        Raises:
+            PDFTooLargeError: PDF überschreitet Größenlimits
+            PDFPasswordProtectedError: PDF ist passwort-geschützt
+            PDFTextExtractionError: Text-Extraktion fehlgeschlagen
+        """
         pdf_path = Path(pdf_path)
         start_time = time.time()
         
@@ -823,7 +896,22 @@ class EnhancedPDFExtractor:
         chunking_strategy: ChunkingStrategy = ChunkingStrategy.SIMPLE,
         max_chunk_size: int = 1000
     ) -> List[ExtractedContent]:
-        """Mehrere PDFs aus einem Verzeichnis extrahieren mit Chunking"""
+        """Mehrere PDFs aus einem Verzeichnis extrahieren mit Chunking.
+        
+        Verarbeitet alle PDF-Dateien in einem Verzeichnis parallel mit 
+        konfigurierbaren Chunking-Strategien.
+        
+        Args:
+            pdf_directory: Pfad zum Verzeichnis mit PDF-Dateien
+            chunking_strategy: Chunking-Strategie für alle PDFs
+            max_chunk_size: Maximale Chunk-Größe
+            
+        Returns:
+            Liste von ExtractedContent-Objekten für erfolgreich verarbeitete PDFs
+            
+        Raises:
+            FileNotFoundError: Verzeichnis nicht gefunden
+        """
         pdf_dir = Path(pdf_directory)
         
         if not pdf_dir.exists():
@@ -863,12 +951,102 @@ class EnhancedPDFExtractor:
                    failed=len(pdf_files) - len(extracted_contents))
         
         return extracted_contents
+    
+    def extract_all(self, files: List[Union[str, Path]], 
+                   chunking_strategy: ChunkingStrategy = ChunkingStrategy.SIMPLE) -> List[ExtractedContent]:
+        """Parallelisierte Extraktion mehrerer PDF-Dateien mit ProcessPoolExecutor.
+        
+        Args:
+            files: Liste von PDF-Dateipfaden
+            chunking_strategy: Chunking-Strategie für alle PDFs
+            
+        Returns:
+            Liste von ExtractedContent-Objekten
+        """
+        def extract_single_file(file_path):
+            """Helper function für ProcessPool - muss top-level function sein"""
+            try:
+                extractor = EnhancedPDFExtractor(enable_chunking=self.enable_chunking)
+                return extractor.extract_text_from_pdf(file_path, chunking_strategy=chunking_strategy)
+            except Exception as e:
+                logger.error(f"Extraction failed for {file_path}: {e}")
+                return None
+        
+        if not files:
+            return []
+            
+        logger.info("Starting parallel PDF extraction", file_count=len(files))
+        
+        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+            results = list(executor.map(extract_single_file, files))
+        
+        # Filter None results (failed extractions)
+        successful_results = [r for r in results if r is not None]
+        
+        logger.info("Parallel extraction completed", 
+                   successful=len(successful_results),
+                   failed=len(files) - len(successful_results))
+        
+        return successful_results
 
 # Backward compatibility - alias für alten Namen
 PDFExtractor = EnhancedPDFExtractor
 
-def demo_pdf_extraction_with_chunking():
-    """Demo-Funktion für PDF-Extraktion mit Chunking"""
+# Standalone function für ProcessPoolExecutor (muss top-level sein)
+def extract_text(file_path: Union[str, Path]) -> Optional[ExtractedContent]:
+    """Standalone Funktion für ProcessPool-basierte Extraktion.
+    
+    Diese Funktion muss auf top-level stehen, da ProcessPoolExecutor
+    die Funktion serialisieren muss.
+    
+    Args:
+        file_path: Pfad zur PDF-Datei
+        
+    Returns:
+        ExtractedContent oder None bei Fehler
+    """
+    try:
+        extractor = EnhancedPDFExtractor()
+        return extractor.extract_text_from_pdf(file_path)
+    except Exception as e:
+        logger.error(f"Extraction failed for {file_path}: {e}")
+        return None
+
+def extract_all(files: List[Union[str, Path]]) -> List[ExtractedContent]:
+    """Parallelisierte Extraktion mehrerer PDF-Dateien.
+    
+    Args:
+        files: Liste von PDF-Dateipfaden
+        
+    Returns:
+        Liste von erfolgreich extrahierten Inhalten
+    """
+    if not files:
+        return []
+        
+    logger.info("Starting ProcessPool extraction", file_count=len(files))
+    
+    with ProcessPoolExecutor() as executor:
+        results = list(executor.map(extract_text, files))
+    
+    # Filter erfolgreiche Extraktionen
+    successful_results = [r for r in results if r is not None]
+    
+    logger.info("ProcessPool extraction completed", 
+               successful=len(successful_results),
+               failed=len(files) - len(successful_results))
+    
+    return successful_results
+
+def demo_pdf_extraction_with_chunking() -> None:
+    """Demo-Funktion für PDF-Extraktion mit verschiedenen Chunking-Strategien.
+    
+    Demonstriert:
+    - Verschiedene Chunking-Strategien (NONE, SIMPLE, SEMANTIC, HYBRID)
+    - Chunk-Analyse und Metadaten
+    - Semantic Clustering Status
+    - Performance-Vergleiche
+    """
     print("🔍 Enhanced PDF-Extraktor Demo mit Chunking")
     print("=========================================")
     

@@ -1,0 +1,342 @@
+name: 🚀 BU-Processor CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  release:
+    types: [ published ]
+
+env:
+  PYTHON_VERSION: "3.9"
+  POETRY_VERSION: "1.5.0"
+
+jobs:
+  # ============================================================================
+  # CODE QUALITY & LINTING
+  # ============================================================================
+  quality:
+    name: 🔍 Code Quality
+    runs-on: ubuntu-latest
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+        
+    - name: 🎨 Code Formatting (Black)
+      run: |
+        black --check --diff src/ tests/
+        
+    - name: 📝 Import Sorting (isort)
+      run: |
+        isort --check-only --diff src/ tests/
+        
+    - name: 🔍 Linting (flake8)
+      run: |
+        flake8 src/ tests/
+        
+    - name: 🏷️ Type Checking (mypy)
+      run: |
+        mypy src/ --ignore-missing-imports
+        
+    - name: 🔒 Security Check (bandit)
+      run: |
+        bandit -r src/ -f json -o bandit-report.json || true
+        
+    - name: 📊 Upload Security Report
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-report
+        path: bandit-report.json
+
+  # ============================================================================
+  # UNIT & INTEGRATION TESTS
+  # ============================================================================
+  test:
+    name: 🧪 Tests (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        exclude:
+          # Reduziere Matrix für Performance
+          - os: macos-latest
+            python-version: "3.8"
+          - os: windows-latest
+            python-version: "3.10"
+            
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Setup Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: 📦 Install System Dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y poppler-utils tesseract-ocr
+        
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        
+    - name: 🧪 Run Unit Tests
+      run: |
+        pytest tests/ -v --cov=src --cov-report=xml --cov-report=term-missing
+        
+    - name: 📊 Upload Coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        
+    - name: 🧪 Integration Tests
+      run: |
+        pytest tests/integration/ -v --maxfail=1 -x
+      env:
+        BU_PROCESSOR_ENVIRONMENT: testing
+        
+    - name: 📊 Test Results
+      uses: dorny/test-reporter@v1
+      if: success() || failure()
+      with:
+        name: Test Results (${{ matrix.os }}, Python ${{ matrix.python-version }})
+        path: test-results.xml
+        reporter: java-junit
+
+  # ============================================================================
+  # PERFORMANCE & BENCHMARKS
+  # ============================================================================
+  performance:
+    name: ⚡ Performance Tests
+    runs-on: ubuntu-latest
+    needs: [quality, test]
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        
+    - name: 🏃 Benchmark Tests
+      run: |
+        pytest tests/performance/ -v --benchmark-only --benchmark-json=benchmark.json
+        
+    - name: 📊 Store Benchmark Results
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        tool: 'pytest'
+        output-file-path: benchmark.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+
+  # ============================================================================
+  # SECURITY SCANNING
+  # ============================================================================
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: [quality]
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🔍 Run Trivy Vulnerability Scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: 📊 Upload Trivy Results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+        
+    - name: 🔍 Dependency Check
+      run: |
+        pip install safety
+        safety check --json --output safety-report.json || true
+        
+    - name: 📊 Upload Safety Report
+      uses: actions/upload-artifact@v3
+      with:
+        name: safety-report
+        path: safety-report.json
+
+  # ============================================================================
+  # BUILD & PACKAGING
+  # ============================================================================
+  build:
+    name: 📦 Build & Package
+    runs-on: ubuntu-latest
+    needs: [quality, test]
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: 📦 Install Build Dependencies
+      run: |
+        python -m pip install --upgrade pip build twine
+        
+    - name: 🔨 Build Package
+      run: |
+        python -m build
+        
+    - name: 🔍 Check Package
+      run: |
+        python -m twine check dist/*
+        
+    - name: 📊 Upload Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: dist-packages
+        path: dist/
+
+  # ============================================================================
+  # DOCKER BUILD
+  # ============================================================================
+  docker:
+    name: 🐳 Docker Build
+    runs-on: ubuntu-latest
+    needs: [build]
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+      
+    - name: 🔍 Login to Docker Hub
+      if: github.event_name == 'release'
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        
+    - name: 📊 Extract Metadata
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: yourusername/bu-processor
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          
+    - name: 🔨 Build and Push
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: ${{ github.event_name == 'release' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # ============================================================================
+  # DEPLOYMENT (nur bei Release)
+  # ============================================================================
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-latest
+    needs: [build, docker, security]
+    if: github.event_name == 'release' && github.event.action == 'published'
+    environment: production
+    
+    steps:
+    - name: 📥 Download Artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: dist-packages
+        path: dist/
+        
+    - name: 🚀 Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        
+    - name: 📊 Create Release Notes
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.repos.updateRelease({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            release_id: context.payload.release.id,
+            body: `
+            ## 🎉 Release ${context.payload.release.tag_name}
+            
+            ### 📦 Installation
+            \`\`\`bash
+            pip install bu-processor==${context.payload.release.tag_name}
+            \`\`\`
+            
+            ### 🐳 Docker
+            \`\`\`bash
+            docker pull yourusername/bu-processor:${context.payload.release.tag_name}
+            \`\`\`
+            
+            ${context.payload.release.body}
+            `
+          });
+
+  # ============================================================================
+  # NOTIFICATION
+  # ============================================================================
+  notify:
+    name: 📢 Notifications
+    runs-on: ubuntu-latest
+    needs: [quality, test, performance, security, build, docker]
+    if: always()
+    
+    steps:
+    - name: 📢 Success Notification
+      if: ${{ needs.test.result == 'success' && needs.quality.result == 'success' }}
+      run: |
+        echo "✅ All checks passed! Ready for merge."
+        
+    - name: 📢 Failure Notification  
+      if: ${{ needs.test.result == 'failure' || needs.quality.result == 'failure' }}
+      run: |
+        echo "❌ Some checks failed. Please review and fix issues."
+        exit 1

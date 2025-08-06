@@ -1,14 +1,18 @@
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
-from pathlib import Path
-from typing import Union, Dict, List, Optional, Any
-import sys
-import os
-import time
-import random
-from functools import wraps
-from datetime import datetime
+"""ML-basierter Dokumentklassifizierer mit Retry-Mechanismus und Batch-Verarbeitung."""
+
 import asyncio
+import logging
+import os
+import random
+import sys
+import time
+from datetime import datetime
+from functools import wraps
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # Pydantic für Schema-Validation
 try:
@@ -40,9 +44,8 @@ except ImportError:
         USE_GPU = True
 
 from .pdf_extractor import EnhancedPDFExtractor, ExtractedContent, DocumentChunk, ChunkingStrategy
-import structlog
 
-logger = structlog.get_logger("pipeline.classifier")
+logger = logging.getLogger(__name__)
 
 # === PYDANTIC SCHEMA-MODELLE ===
 
@@ -106,11 +109,20 @@ else:
 # === RETRY & TIMEOUT DECORATOR ===
 
 class ClassificationTimeout(Exception):
-    """Custom timeout exception für Klassifikation"""
+    """Custom timeout exception für Klassifikation.
+    
+    Wird ausgelöst wenn eine Klassifikations-Operation das konfigurierte Timeout überschreitet.
+    """
+    
     pass
 
+
 class ClassificationRetryError(Exception):
-    """Exception für fehlgeschlagene Retries"""
+    """Exception für fehlgeschlagene Retries.
+    
+    Wird ausgelöst wenn alle Retry-Versuche einer Operation fehlgeschlagen sind.
+    """
+    
     pass
 
 def with_retry_and_timeout(
@@ -219,11 +231,36 @@ def with_retry_and_timeout(
 # === ERWEITERTE CLASSIFIER-KLASSE ===
 
 class RealMLClassifier:
-    def __init__(self, 
-                 model_path=ML_MODEL_PATH,
-                 batch_size: int = 32,
-                 max_retries: int = 3,
-                 timeout_seconds: float = 30.0):
+    """ML-basierter Dokumentklassifizierer mit Retry-Mechanismus und Batch-Verarbeitung.
+    
+    Diese Klasse bietet erweiterte Funktionen für die Klassifikation von Dokumenten
+    mit Unterstützung für PDF-Verarbeitung, Batch-Operations und robustem Error Handling.
+    
+    Attributes:
+        device: PyTorch device für Model-Inferenz
+        batch_size: Batch-Größe für parallele Verarbeitung
+        max_retries: Maximale Anzahl Wiederholungsversuche bei Fehlern
+        timeout_seconds: Timeout für einzelne Operations
+        pdf_extractor: PDF-Textextraktor Instanz
+        tokenizer: Hugging Face Tokenizer
+        model: Trainiertes Klassifikationsmodell
+    """
+    
+    def __init__(
+        self, 
+        model_path: str = ML_MODEL_PATH,
+        batch_size: int = 32,
+        max_retries: int = 3,
+        timeout_seconds: float = 30.0
+    ) -> None:
+        """Initialisiert den ML-Classifier.
+        
+        Args:
+            model_path: Pfad zum trainierten ML-Modell
+            batch_size: Batch-Größe für parallele Verarbeitung
+            max_retries: Maximale Anzahl Wiederholungsversuche
+            timeout_seconds: Timeout in Sekunden für Operations
+        """
         
         self.device = torch.device('cuda' if torch.cuda.is_available() and USE_GPU else 'cpu')
         self.batch_size = batch_size
@@ -236,31 +273,51 @@ class RealMLClassifier:
         # Enhanced PDF-Extraktor mit Chunking initialisieren
         self.pdf_extractor = EnhancedPDFExtractor(enable_chunking=True)
         
-        logger.info("Enhanced Classifier initialisiert", 
-                   device=str(self.device), 
-                   model_path=model_path,
-                   batch_size=batch_size,
-                   max_retries=max_retries,
-                   timeout_seconds=timeout_seconds)
+        logger.info(
+            f"Enhanced Classifier initialisiert - "
+            f"Device: {self.device}, "
+            f"Model Path: {model_path}, "
+            f"Batch Size: {batch_size}, "
+            f"Max Retries: {max_retries}, "
+            f"Timeout: {timeout_seconds}s"
+        )
 
     @with_retry_and_timeout(max_retries=2, timeout_seconds=60.0)
-    def _initialize_model(self, model_path: str):
-        """Model-Initialisierung mit Retry-Mechanismus"""
+    def _initialize_model(self, model_path: str) -> None:
+        """Initialisiert das ML-Model mit Retry-Mechanismus.
+        
+        Args:
+            model_path: Pfad zum Hugging Face Model oder lokalen Model-Verzeichnis
+            
+        Raises:
+            Exception: Bei fehlgeschlagener Model-Initialisierung
+        """
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_path)
             self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
             self.model.to(self.device)
             self.model.eval()
             
-            logger.info("Model erfolgreich geladen", model_path=model_path)
+            logger.info(f"Model erfolgreich geladen: {model_path}")
             
         except Exception as e:
             logger.error(f"Model-Initialisierung fehlgeschlagen: {e}", exc_info=True)
             raise
 
     @with_retry_and_timeout(max_retries=3, timeout_seconds=30.0)
-    def classify_text(self, text: str) -> Union[Dict, ClassificationResult]:
-        """Klassifiziere reinen Text mit Retry-Mechanismus"""
+    def classify_text(self, text: str) -> Union[Dict[str, Any], ClassificationResult]:
+        """Klassifiziert den Input-Text in vordefinierte Kategorien.
+        
+        Args:
+            text: Rohtext, der klassifiziert werden soll
+            
+        Returns:
+            Ein Dict mit Kategorie-Namen und Wahrscheinlichkeiten oder 
+            ClassificationResult Pydantic-Model falls verfügbar
+            
+        Raises:
+            ClassificationRetryError: Nach fehlgeschlagenen Retry-Versuchen
+        """
         start_time = time.time()
         
         inputs = self.tokenizer(
@@ -298,11 +355,22 @@ class RealMLClassifier:
         else:
             return result_data
 
-    def classify_batch(self, 
-                      texts: List[str], 
-                      batch_id: Optional[str] = None) -> Union[Dict, BatchClassificationResult]:
-        """
-        Batch-Klassifikation für bessere Performance bei vielen Texten
+    def classify_batch(
+        self, 
+        texts: List[str], 
+        batch_id: Optional[str] = None
+    ) -> Union[Dict[str, Any], BatchClassificationResult]:
+        """Batch-Klassifikation für bessere Performance bei vielen Texten.
+        
+        Args:
+            texts: Liste von Texten zur Klassifikation
+            batch_id: Optionale eindeutige Batch-ID für Logging
+            
+        Returns:
+            BatchClassificationResult mit aggregierten Ergebnissen
+            
+        Raises:
+            ValueError: Falls keine Texte übergeben werden
         """
         if not texts:
             raise ValueError("Keine Texte für Batch-Klassifikation übergeben")
@@ -310,9 +378,7 @@ class RealMLClassifier:
         start_time = time.time()
         batch_id = batch_id or f"batch_{int(time.time())}"
         
-        logger.info("Batch-Klassifikation gestartet", 
-                   batch_size=len(texts), 
-                   batch_id=batch_id)
+        logger.info(f"Batch-Klassifikation gestartet - Batch Size: {len(texts)}, Batch ID: {batch_id}")
         
         results = []
         successful = 0
@@ -332,11 +398,13 @@ class RealMLClassifier:
         
         total_time = time.time() - start_time
         
-        logger.info("Batch-Klassifikation abgeschlossen",
-                   total_processed=len(texts),
-                   successful=successful,
-                   failed=failed,
-                   batch_time=total_time)
+        logger.info(
+            f"Batch-Klassifikation abgeschlossen - "
+            f"Total: {len(texts)}, "
+            f"Successful: {successful}, "
+            f"Failed: {failed}, "
+            f"Time: {total_time:.2f}s"
+        )
         
         result_data = {
             "total_processed": len(texts),
@@ -665,10 +733,23 @@ class RealMLClassifier:
                 "directory": str(pdf_directory)
             }]
     
-    def classify(self, input_data: Union[str, Path, List[str]]) -> Union[Dict, ClassificationResult, BatchClassificationResult]:
-        """
-        Universelle Klassifikationsmethode - erkennt automatisch Input-Typ
-        Unterstützt jetzt auch Listen für Batch-Verarbeitung
+    def classify(
+        self, 
+        input_data: Union[str, Path, List[str]]
+    ) -> Union[Dict[str, Any], ClassificationResult, BatchClassificationResult]:
+        """Universelle Klassifikationsmethode - erkennt automatisch Input-Typ.
+        
+        Diese Methode kann Texte, PDF-Dateien, Verzeichnisse oder Listen verarbeiten
+        und wählt automatisch die passende Verarbeitungsstrategie.
+        
+        Args:
+            input_data: Text-String, Pfad zu PDF, Verzeichnis oder Liste von Texten
+            
+        Returns:
+            Klassifikationsergebnis je nach Input-Typ
+            
+        Raises:
+            ValueError: Bei ungültigen Input-Typen
         """
         # Liste von Texten -> Batch-Verarbeitung
         if isinstance(input_data, list):
@@ -710,7 +791,13 @@ class RealMLClassifier:
             return self.classify_text(str(input_data))
 
     def get_health_status(self) -> Dict[str, Any]:
-        """Gesundheitsstatus des Classifiers"""
+        """Prüft den Gesundheitsstatus des Classifiers.
+        
+        Führt einen Test-Klassifikationslauf durch und sammelt System-Metriken.
+        
+        Returns:
+            Dict mit Status-Informationen, Response-Zeit und System-Details
+        """
         try:
             # Test-Klassifikation für Health Check
             test_text = "Test classification for health check"
@@ -737,8 +824,15 @@ class RealMLClassifier:
                 "test_classification": "failed"
             }
 
-def demo_enhanced_classifier():
-    """Demo-Funktion für erweiterten Classifier mit Batch-Support und Retry-Mechanismus"""
+def demo_enhanced_classifier() -> None:
+    """Demo-Funktion für erweiterten Classifier mit Batch-Support und Retry-Mechanismus.
+    
+    Demonstriert verschiedene Features:
+    - Einzelne Text-Klassifikation mit Schema-Validierung
+    - Batch-Klassifikation für Performance-Vergleiche
+    - PDF-Klassifikation mit Retry-Mechanismus
+    - Health-Check und Performance-Metriken
+    """
     print("🚀 Enhanced BU Classifier Demo - Batch, Retry & Schema Validation")
     print("================================================================")
     

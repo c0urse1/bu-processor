@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 Documentation
+    url: https://github.com/yourusername/bu-processor/wiki
+    about: Comprehensive documentation and guides
+  - name: 💬 Discussions
+    url: https://github.com/yourusername/bu-processor/discussions
+    about: Ask questions and discuss ideas with the community
+  - name: 🚀 Examples
+    url: https://github.com/yourusername/bu-processor/tree/main/examples
+    about: Code examples and tutorials

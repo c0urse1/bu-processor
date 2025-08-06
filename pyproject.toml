@@ -1,0 +1,54 @@
+[tool.pytest.ini_options]
+# Pytest Configuration für BU-Processor Tests
+minversion = "8.0"
+addopts = [
+    "-ra",                    # Show all test results summary
+    "-q",                     # Quiet mode
+    "--strict-markers",       # Strict marker validation  
+    "--strict-config",        # Strict config validation
+    "--cov=bu_processor",     # Coverage für bu_processor package
+    "--cov-report=term-missing", # Coverage report mit fehlenden Zeilen
+    "--cov-report=html:htmlcov", # HTML coverage report
+    "--tb=short",             # Kurze Traceback-Anzeige
+    "--durations=10",         # Zeige 10 langsamste Tests
+]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Marker für verschiedene Test-Kategorien
+markers = [
+    "unit: Unit tests für einzelne Komponenten",
+    "integration: Integration tests für Pipeline-Komponenten", 
+    "slow: Langsame Tests (>5s)",
+    "external: Tests die externe Services benötigen",
+    "mock: Tests mit umfassenden Mocks",
+    "pdf: PDF-spezifische Tests",
+    "ml: Machine Learning Model Tests",
+    "async: Asynchrone Tests",
+    "parametrize: Parametrisierte Tests"
+]
+
+# Filterung basierend auf verfügbaren Dependencies
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning", 
+    "ignore:.*torch.*:UserWarning",
+    "ignore:.*transformers.*:FutureWarning"
+]
+
+# Test discovery
+norecursedirs = [
+    ".git",
+    ".tox", 
+    "dist",
+    "build",
+    "*.egg",
+    "node_modules",
+    ".env",
+    "venv"
+]
+
+# Performance settings
+timeout = 300  # 5 Minuten timeout für sehr langsame Tests
