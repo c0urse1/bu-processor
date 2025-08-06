@@ -1,4 +1,0 @@
-cd C:\ml_classifier_poc\bu_processor
-.\venv\Scripts\activate
-python -m src.pipeline.enhanced_integrated_pipeline
-
