@@ -11,6 +11,23 @@ import threading
 import time
 import os
 
+# NEU: Import für OCR-Funktionalität
+try:
+    import pytesseract
+    from PIL import Image
+    import io
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
+# NEU: Import für Satz-basiertes Chunking (nltk als optionale, robustere Alternative)
+try:
+    import nltk
+    nltk.download('punkt', quiet=True)
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
+
 # Import semantic chunking (mit fallback)
 try:
     from .semantic_chunking_enhancement import SemanticClusteringEnhancer
@@ -211,6 +228,12 @@ class EnhancedPDFExtractor:
             self.semantic_enhancer = None
             if enable_chunking and not SEMANTIC_CHUNKING_AVAILABLE:
                 logger.warning("Semantic chunking requested but not available")
+
+        # OCR Status
+        if OCR_AVAILABLE:
+            logger.info("OCR engine (pytesseract) is available for image-based PDFs.")
+        else:
+            logger.warning("OCR engine (pytesseract) not found. Image-based PDFs cannot be processed.")
     
     def _validate_pdf(self, pdf_path: Path) -> None:
         """Validate PDF file before processing"""
@@ -365,13 +388,19 @@ class EnhancedPDFExtractor:
             return base_content
     
     def _extract_base_content(self, pdf_path: Path) -> ExtractedContent:
-        """Basis PDF-Extraktion ohne Chunking"""
-        # Versuche bevorzugte Methode
+        """Versucht Text-Extraktion mit Standard-Methoden, nutzt OCR als finalen Fallback."""
+        health_info = self._check_pdf_health(pdf_path)
+        
+        # Standard-Extraktions-Kette
         try:
             if self.prefer_method == "pymupdf":
-                return self._extract_with_pymupdf(pdf_path)
+                content = self._extract_with_pymupdf(pdf_path)
+                if self.text_cleaner.validate_extracted_text(content.text):
+                    return content
             elif self.prefer_method == "pypdf2":
-                return self._extract_with_pypdf2(pdf_path)
+                content = self._extract_with_pypdf2(pdf_path)
+                if self.text_cleaner.validate_extracted_text(content.text):
+                    return content
         except Exception as e:
             logger.warning(f"Bevorzugte Methode {self.prefer_method} fehlgeschlagen: {e}")
             
@@ -381,14 +410,26 @@ class EnhancedPDFExtractor:
                 try:
                     logger.info("Fallback-Versuch", method=method)
                     if method == "pymupdf":
-                        return self._extract_with_pymupdf(pdf_path)
+                        content = self._extract_with_pymupdf(pdf_path)
+                        if self.text_cleaner.validate_extracted_text(content.text):
+                            return content
                     elif method == "pypdf2":
-                        return self._extract_with_pypdf2(pdf_path)
+                        content = self._extract_with_pypdf2(pdf_path)
+                        if self.text_cleaner.validate_extracted_text(content.text):
+                            return content
                 except Exception as e:
                     logger.warning(f"Fallback {method} fehlgeschlagen: {e}")
                     continue
         
-        raise RuntimeError(f"Alle Extraktionsmethoden fehlgeschlagen für: {pdf_path}")
+        # Finaler Fallback: OCR, wenn kein Text gefunden wurde
+        if not health_info.get("has_text_content") and OCR_AVAILABLE:
+            logger.info("Kein Text im PDF gefunden. Versuche OCR-Extraktion.", file=str(pdf_path))
+            try:
+                return self._extract_with_ocr(pdf_path)
+            except Exception as ocr_error:
+                logger.error("OCR-Extraktion fehlgeschlagen", error=str(ocr_error))
+        
+        raise PDFTextExtractionError(f"Kein extrahierbarer Text in {pdf_path} gefunden, auch nicht mit OCR.")
     
     def _apply_chunking_strategy(
         self, 
@@ -411,62 +452,64 @@ class EnhancedPDFExtractor:
         else:
             return []
     
+    # ### VERBESSERUNG 3: SATZ-BASIERTES CHUNKING ###
     def _simple_chunking(self, text: str, max_chunk_size: int, overlap_size: int) -> List[DocumentChunk]:
-        """Einfache absatz-basierte Chunking-Strategie"""
+        """Intelligenteres Chunking, das Satzgrenzen respektiert."""
+        
+        # Sätze extrahieren
+        if NLTK_AVAILABLE:
+            sentences = nltk.sent_tokenize(text, language='german')
+        else:
+            # Einfacherer Fallback mit Regex
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+
         chunks = []
-        
-        # Teile nach Absätzen
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        
-        current_chunk = ""
-        current_start = 0
-        chunk_id = 0
-        
-        for paragraph in paragraphs:
-            # Prüfe ob Paragraph in aktuellen Chunk passt
-            if len(current_chunk) + len(paragraph) <= max_chunk_size:
-                if current_chunk:
-                    current_chunk += "\n\n" + paragraph
-                else:
-                    current_chunk = paragraph
-            else:
-                # Erstelle Chunk falls vorhanden
-                if current_chunk:
-                    chunk = DocumentChunk(
-                        id=f"chunk_{chunk_id}",
-                        text=current_chunk,
-                        start_position=current_start,
-                        end_position=current_start + len(current_chunk),
-                        chunk_type="paragraph_group",
-                        importance_score=1.0
-                    )
-                    chunks.append(chunk)
-                    chunk_id += 1
-                    
-                    # Overlap handling
-                    if overlap_size > 0 and len(current_chunk) > overlap_size:
-                        overlap_text = current_chunk[-overlap_size:]
-                        current_chunk = overlap_text + "\n\n" + paragraph
-                        current_start = chunk.end_position - overlap_size
+        current_chunk_sentences = []
+        current_length = 0
+        chunk_id_counter = 0
+
+        for sentence in sentences:
+            sentence_len = len(sentence)
+            if current_length + sentence_len + 1 > max_chunk_size and current_chunk_sentences:
+                # Aktuellen Chunk abschließen
+                chunk_text = " ".join(current_chunk_sentences)
+                chunks.append(DocumentChunk(
+                    id=f"chunk_{chunk_id_counter}",
+                    text=chunk_text,
+                    start_position=0,  # Positionen müssten neu berechnet werden, hier vereinfacht
+                    end_position=len(chunk_text),
+                    chunk_type="sentence_group"
+                ))
+                chunk_id_counter += 1
+                
+                # Overlap-Logik: Die letzten paar Sätze für den nächsten Chunk behalten
+                overlap_sentences = []
+                overlap_len = 0
+                for s in reversed(current_chunk_sentences):
+                    if overlap_len + len(s) < overlap_size:
+                        overlap_sentences.insert(0, s)
+                        overlap_len += len(s)
                     else:
-                        current_chunk = paragraph
-                        current_start = chunk.end_position
-                else:
-                    current_chunk = paragraph
-        
-        # Letzten Chunk hinzufügen
-        if current_chunk:
-            chunk = DocumentChunk(
-                id=f"chunk_{chunk_id}",
-                text=current_chunk,
-                start_position=current_start,
-                end_position=current_start + len(current_chunk),
-                chunk_type="paragraph_group",
-                importance_score=1.0
-            )
-            chunks.append(chunk)
-        
-        logger.info(f"Simple chunking completed", chunks_created=len(chunks))
+                        break
+                
+                current_chunk_sentences = overlap_sentences
+                current_length = overlap_len
+
+            current_chunk_sentences.append(sentence)
+            current_length += sentence_len + 1
+
+        # Den letzten verbleibenden Chunk hinzufügen
+        if current_chunk_sentences:
+            chunk_text = " ".join(current_chunk_sentences)
+            chunks.append(DocumentChunk(
+                id=f"chunk_{chunk_id_counter}",
+                text=chunk_text,
+                start_position=0,
+                end_position=len(chunk_text),
+                chunk_type="sentence_group"
+            ))
+
+        logger.info(f"Sentence-based chunking completed", chunks_created=len(chunks))
         return chunks
     
     def _semantic_chunking(self, text: str, max_chunk_size: int) -> List[DocumentChunk]:
@@ -506,6 +549,38 @@ class EnhancedPDFExtractor:
         
         return chunks
     
+    # ### VERBESSERUNG 2: OCR-FALLBACK ###
+    def _extract_with_ocr(self, pdf_path: Path) -> ExtractedContent:
+        """Extrahiert Text aus einem PDF via OCR als Fallback."""
+        if not OCR_AVAILABLE:
+            raise PDFTextExtractionError("OCR-Bibliotheken (pytesseract, Pillow) sind nicht installiert.")
+        
+        text_parts = []
+        page_count = 0
+        try:
+            with fitz.open(str(pdf_path)) as doc:
+                page_count = len(doc)
+                for page_num in range(page_count):
+                    page = doc.load_page(page_num)
+                    pix = page.get_pixmap(dpi=300)  # Höhere DPI für bessere OCR-Ergebnisse
+                    img_bytes = pix.tobytes("png")
+                    img = Image.open(io.BytesIO(img_bytes))
+                    
+                    # OCR auf das Bild anwenden
+                    page_text = pytesseract.image_to_string(img, lang='deu')  # 'deu' für Deutsch
+                    text_parts.append(page_text)
+
+            full_text = "\n\n".join(text_parts)
+            return ExtractedContent(
+                text=full_text.strip(),
+                page_count=page_count,
+                file_path=str(pdf_path),
+                metadata={"ocr_applied": True},
+                extraction_method="pymupdf_ocr"
+            )
+        except Exception as e:
+            raise PDFTextExtractionError(f"OCR extraction failed: {e}") from e
+    
     def _apply_semantic_enhancement(self, content: ExtractedContent) -> ExtractedContent:
         """Wendet semantische Verbesserungen auf Chunks an"""
         if not self.semantic_enhancer or not content.chunks:
@@ -539,6 +614,31 @@ class EnhancedPDFExtractor:
         
         return content
     
+    # ### VERBESSERUNG 1: ADAPTIVE PARALLELISIERUNG ###
+    def _should_parallelize(self, doc: fitz.Document) -> bool:
+        """Entscheidet adaptiv, ob Parallelisierung sinnvoll ist."""
+        page_count = len(doc)
+        if page_count <= 5:  # Bei sehr wenigen Seiten lohnt sich der Overhead nicht
+            return False
+        
+        # Analysiere die Komplexität der ersten paar Seiten
+        # Annahme: Komplexe Seiten (viel Text/Bilder) profitieren mehr von Parallelisierung
+        try:
+            sample_pages = min(page_count, 3)
+            total_text_length = sum(len(doc.load_page(i).get_text()) for i in range(sample_pages))
+            avg_text_per_page = total_text_length / sample_pages if sample_pages > 0 else 0
+            
+            # Heuristik: Parallelisieren, wenn > 20 Seiten ODER > 10 Seiten mit viel Text
+            if page_count > 20 or (page_count > 10 and avg_text_per_page > 1500):
+                logger.debug("Adaptive Entscheidung: Parallelisierung aktiviert.", page_count=page_count, avg_text=avg_text_per_page)
+                return True
+        except Exception:
+            # Fallback bei Fehler in der Analyse
+            return page_count > 10
+        
+        logger.debug("Adaptive Entscheidung: Parallelisierung deaktiviert.", page_count=page_count)
+        return False
+    
     def _extract_with_pymupdf(self, pdf_path: Path) -> ExtractedContent:
         """Text-Extraktion mit PyMuPDF (empfohlen) mit paralleler Verarbeitung"""
         try:
@@ -564,11 +664,10 @@ class EnhancedPDFExtractor:
                     except Exception as e:
                         logger.warning(f"Failed to extract metadata: {e}")
                 
-                # Parallele Extraktion für große PDFs
-                if page_count > 10 and self.max_workers > 1:
+                # NEU: Adaptive Entscheidung für Parallelisierung
+                if self._should_parallelize(doc):
                     text = self._extract_pages_parallel(doc, page_count)
                 else:
-                    # Sequentielle Extraktion für kleine PDFs
                     text = self._extract_pages_sequential(doc, page_count)
                 
                 if not text or len(text.strip()) < MIN_EXTRACTED_TEXT_LENGTH:
