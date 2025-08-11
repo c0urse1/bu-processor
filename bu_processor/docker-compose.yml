@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  bu-processor-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - BU_PROCESSOR_ENVIRONMENT=development
+      - BU_PROCESSOR_ML_MODEL__USE_GPU=false
+      - BU_PROCESSOR_API__HOST=0.0.0.0
+      - BU_PROCESSOR_API__PORT=8000
+      - BU_PROCESSOR_PDF_PROCESSING__ENABLE_CACHE=true
+    volumes:
+      - ./cache:/app/cache
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - bu-processor-network
+
+  # Optional: Redis for caching (if needed in future)
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   networks:
+  #     - bu-processor-network
+
+  # Optional: Monitoring with Prometheus (if needed)
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   networks:
+  #     - bu-processor-network
+
+networks:
+  bu-processor-network:
+    driver: bridge
+
+volumes:
+  redis_data:

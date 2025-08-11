@@ -1,0 +1,48 @@
+# ============================================================================  
+# BU-PROCESSOR GITIGNORE  
+# ============================================================================  
+
+# Byte-Compiled Files
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Virtual Environment
+.venv/
+
+# Build / Distribution
+build/
+dist/
+*.egg-info/
+
+# Tests / Coverage
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+# IDEs / Editors
+.vscode/
+.idea/
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Environment & Secrets
+.env*
+*.key
+*.pem
+
+# Large Files & Model Artifacts
+models/
+*.bin
+*.h5
+*.onnx
+*.pkl
+*.joblib
+
+# PDF Fixtures (privacy)
+tests/fixtures/*.pdf
+
+# Docker
+.dockerignore

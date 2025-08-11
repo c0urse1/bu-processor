@@ -1,0 +1,77 @@
+[flake8]
+# ============================================================================
+# FLAKE8 CONFIGURATION
+# ============================================================================
+# Compatible with Black formatter
+
+# Maximum line length (same as Black)
+max-line-length = 88
+
+# Ignore specific error codes
+ignore = 
+    # E203: whitespace before ':' (conflicts with Black)
+    E203,
+    # W503: line break before binary operator (conflicts with Black)
+    W503,
+    # E501: line too long (handled by Black)
+    E501,
+    # F401: imported but unused (common in __init__.py files)
+    # F401,
+    # E402: module level import not at top of file
+    # E402
+
+# Exclude directories and files
+exclude = 
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    .tox,
+    .mypy_cache,
+    .pytest_cache,
+    *.egg-info,
+    build,
+    dist,
+    .eggs,
+    docs,
+    migrations,
+    # Specific files
+    setup.py,
+    conftest.py
+
+# Per-file ignores
+per-file-ignores =
+    # __init__.py files can have unused imports
+    __init__.py:F401,F403
+    # Test files can have additional flexibility
+    tests/*:F401,F403,E402
+    # Demo/example files can be more relaxed
+    *demo*.py:E402,F401
+    # Script files can have imports at different locations
+    scripts/*:E402
+
+# Enable specific checks
+select = E,W,F,C,N
+
+# McCabe complexity threshold
+max-complexity = 10
+
+# Docstring conventions (pydocstyle integration)
+docstring-convention = google
+
+# Import order checking (compatible with isort)
+import-order-style = google
+
+# Enable additional checks
+enable-extensions = 
+    # pep8-naming
+    N,
+    # mccabe
+    C
+
+# Statistics
+statistics = True
+count = True
+
+# Show source code in error output
+show-source = True
