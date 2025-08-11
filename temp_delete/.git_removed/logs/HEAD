@@ -1,0 +1,13 @@
+0000000000000000000000000000000000000000 3f3ef4c04cfeff952eeeb665fd3fce13f984314c c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754373609 +0200	commit (initial): Initial commit: BU-Processor v3.0.0 - AI Document Analysis Pipeline
+3f3ef4c04cfeff952eeeb665fd3fce13f984314c 0000000000000000000000000000000000000000 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754373623 +0200	Branch: renamed refs/heads/master to refs/heads/main
+0000000000000000000000000000000000000000 3f3ef4c04cfeff952eeeb665fd3fce13f984314c c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754373623 +0200	Branch: renamed refs/heads/master to refs/heads/main
+3f3ef4c04cfeff952eeeb665fd3fce13f984314c 0000000000000000000000000000000000000000 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754373843 +0200	Branch: renamed refs/heads/main to refs/heads/main
+3f3ef4c04cfeff952eeeb665fd3fce13f984314c 3f3ef4c04cfeff952eeeb665fd3fce13f984314c c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754373843 +0200	Branch: renamed refs/heads/main to refs/heads/main
+3f3ef4c04cfeff952eeeb665fd3fce13f984314c 51fb08f2f1d9d885f3843cec06be4695e668300f c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754377856 +0200	commit: Beschreibe kurz, was du an Config und Pipeline geändert hast
+51fb08f2f1d9d885f3843cec06be4695e668300f f2e8923b769de0a223d512df944c7826d0741ba5 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754461070 +0200	commit: Beschreibe kurz, was du an Config und Pipeline geändert hast
+f2e8923b769de0a223d512df944c7826d0741ba5 a1328c6f9c03b07dea1b2d9d45d3763420229ae2 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754487830 +0200	commit: GTP Update
+a1328c6f9c03b07dea1b2d9d45d3763420229ae2 c0e507d627679f594b0f44d99ddfd7d04951f7f8 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754504045 +0200	commit: Mein Commit
+c0e507d627679f594b0f44d99ddfd7d04951f7f8 ec1e04ae68dc8ce7849d4d313d68a0cd666e4289 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754505455 +0200	commit: cleaning
+ec1e04ae68dc8ce7849d4d313d68a0cd666e4289 ec1e04ae68dc8ce7849d4d313d68a0cd666e4289 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754510161 +0200	reset: moving to HEAD
+ec1e04ae68dc8ce7849d4d313d68a0cd666e4289 eaac64451eef18e054341335f83e4968dbbbe9d4 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754510251 +0200	commit: last changes
+eaac64451eef18e054341335f83e4968dbbbe9d4 6d0374f413df0869a055d50b8a82f6712c5c7d33 c0urse1 <139885346+c0urse1@users.noreply.github.com> 1754895267 +0200	commit: chore(cleanup): remove legacy demo, batch scripts, temp directories; add backward-compatible simhash wrappers

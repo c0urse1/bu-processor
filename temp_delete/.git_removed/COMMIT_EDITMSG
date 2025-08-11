@@ -1,0 +1,1 @@
+chore(cleanup): remove legacy demo, batch scripts, temp directories; add backward-compatible simhash wrappers
