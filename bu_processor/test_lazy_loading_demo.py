@@ -8,6 +8,7 @@ when testing from_pretrained method calls.
 """
 
 import pytest
+import os
 from unittest.mock import Mock
 import torch
 
@@ -91,29 +92,48 @@ class TestLazyLoadingApproaches:
             return_value=mocker.Mock()
         )
         
-        # Manually trigger loading using the utility function
-        from tests.conftest import force_model_loading
-        force_model_loading(classifier)
+        # Manually trigger loading using environment variable
+        os.environ["BU_LAZY_MODELS"] = "0"  # Force eager loading
         
-        # Now the assertions should work
-        # Note: This might not work perfectly if mocks were set up before classifier creation
+        # Recreate classifier with eager loading
+        from bu_processor.core.config import get_config
+        from bu_processor.pipeline.classifier import RealMLClassifier
+        
+        config = get_config()
+        classifier = RealMLClassifier(config)
+        
         print("✅ Approach 3: Manual loading approach demonstrated!")
     
     def test_with_factory_function(self, mocker):
-        """Approach 4: Use the create_eager_classifier_fixture factory.
+        """Approach 4: Use environment variables for eager loading.
         
         This approach creates a classifier programmatically with eager loading.
         """
-        from tests.conftest import create_eager_classifier_fixture
+        # Set environment for eager loading
+        os.environ["BU_LAZY_MODELS"] = "0"
+        
+        # Set up mocks
+        mock_tokenizer_patch = mocker.patch(
+            "bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained",
+            return_value=mocker.Mock()
+        )
+        mock_model_patch = mocker.patch(
+            "bu_processor.pipeline.classifier.AutoModelForSequenceClassification.from_pretrained",
+            return_value=mocker.Mock()
+        )
         
         # Create classifier with eager loading
-        classifier, mock_tokenizer_patch, mock_model_patch = create_eager_classifier_fixture(mocker)
+        from bu_processor.core.config import get_config
+        from bu_processor.pipeline.classifier import RealMLClassifier
         
-        # These should work because the factory disabled lazy loading
+        config = get_config()
+        classifier = RealMLClassifier(config)
+        
+        # These should work because eager loading is enabled
         mock_tokenizer_patch.assert_called_once() 
         mock_model_patch.assert_called_once()
         
-        print("✅ Approach 4: Factory function approach works!")
+        print("✅ Approach 4: Environment variable approach works!")
     
     def test_lazy_loading_behavior_default(self, mocker, classifier_with_mocks):
         """Demonstration: Default lazy loading behavior.

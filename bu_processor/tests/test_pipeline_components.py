@@ -8,6 +8,9 @@ from typing import Dict, List, Any
 
 import pytest
 
+# Import der Skip-Markers für schwere Dependencies
+from .conftest import requires_sentence_transformers, requires_pinecone, requires_full_ml_stack
+
 # Import der zu testenden Klassen
 try:
     from bu_processor.pipeline.pinecone_integration import (
@@ -50,7 +53,8 @@ except ImportError:
     SEMANTIC_ENHANCEMENT_AVAILABLE = False
 
 
-@pytest.mark.skipif(not PINECONE_AVAILABLE, reason="Pinecone integration nicht verfügbar")
+@pytest.mark.skipif(not PINECONE_AVAILABLE, reason="Pinecone nicht verfügbar")
+@requires_sentence_transformers
 class TestPineconeIntegration:
     """Tests für Pinecone Vector Database Integration."""
     
@@ -482,6 +486,7 @@ class TestEnhancedIntegratedPipeline:
         assert health['components_initialized'] > 0
 
 
+@requires_sentence_transformers  
 class TestSemanticChunkingEnhancement:
     """Tests für Semantic Chunking Enhancement."""
     

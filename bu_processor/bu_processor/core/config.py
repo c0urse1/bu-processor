@@ -58,6 +58,12 @@ class PDFExtractionMethod(str, Enum):
 class MLModelConfig(BaseSettings):
     """ML-Model spezifische Konfiguration"""
     
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        env_file=".env",
+        env_prefix="BU_",
+    )
+    
     # Model Paths
     model_path: str = Field(
         default="bert-base-german-cased",
@@ -77,11 +83,11 @@ class MLModelConfig(BaseSettings):
         default=512,
         description="Maximale Token-Länge für das Modell"
     )
-    confidence_threshold: float = Field(
+    classifier_confidence_threshold: float = Field(
         default=0.8,
         ge=0.0,
         le=1.0,
-        description="Schwellwert für sichere Klassifikation"
+        description="Konfigurierbarer Schwellwert für sichere Klassifikation"
     )
     use_gpu: bool = Field(
         default=True,
@@ -721,7 +727,7 @@ class BUProcessorConfig(BaseSettings):
     
     model_config = SettingsConfigDict(
         # Environment-Variable Prefixes
-        env_prefix="BU_PROCESSOR_",
+        env_prefix="BU_",
         env_nested_delimiter="__",
         
         # Environment file loading
@@ -887,7 +893,7 @@ except Exception as e:
 # Backward compatibility exports
 ML_MODEL_PATH = settings.ml_model.model_path
 MAX_SEQUENCE_LENGTH = settings.ml_model.max_sequence_length
-CONFIDENCE_THRESHOLD = settings.ml_model.confidence_threshold
+CONFIDENCE_THRESHOLD = settings.ml_model.classifier_confidence_threshold
 USE_GPU = settings.ml_model.use_gpu
 SENTENCE_TRANSFORMER_MODEL = settings.ml_model.sentence_transformer_model
 

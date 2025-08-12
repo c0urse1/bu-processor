@@ -59,6 +59,14 @@ try:
     except ImportError:
         PINECONE_ASYNC_AVAILABLE = False
     PINECONE_AVAILABLE = True
+except ImportError as e:
+    # Handle pinecone dependency issues gracefully
+    Pinecone = None  # type: ignore
+    ServerlessSpec = None  # type: ignore
+    Vector = None  # type: ignore
+    PINECONE_AVAILABLE = False
+    PINECONE_ASYNC_AVAILABLE = False
+    PINECONE_AVAILABLE = True
 except ImportError:
     PINECONE_AVAILABLE = False
     PINECONE_ASYNC_AVAILABLE = False
@@ -1211,6 +1219,10 @@ class PineconeManager:  # pragma: no cover - dünner Kompatibilitätslayer
         embedding_model: str = "all-MiniLM-L6-v2",
         dimension: int = 384,
     ) -> None:
+        # Early check if Pinecone is available
+        if not PINECONE_AVAILABLE:
+            logger.info("Pinecone nicht verfügbar, using stub mode")
+        
         self.api_key = api_key
         self.environment = environment
         self.index_name = index_name

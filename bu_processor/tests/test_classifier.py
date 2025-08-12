@@ -8,6 +8,9 @@ from unittest.mock import Mock, patch, MagicMock
 import pytest
 import torch
 
+# Import der Skip-Markers für schwere Dependencies
+from .conftest import requires_torch, requires_transformers, requires_ml_stack
+
 # Import der zu testenden Klassen
 from bu_processor.pipeline.classifier import (
     RealMLClassifier, 
@@ -20,53 +23,23 @@ from bu_processor.pipeline.classifier import (
 )
 
 
+@requires_ml_stack
 class TestRealMLClassifier:
     """Test Suite für RealMLClassifier mit umfassenden Mocks."""
     
-    @pytest.fixture
-    def mock_model_components(self, mocker):
-        """Mock für Transformer-Komponenten."""
-        # Mock Tokenizer
-        mock_tokenizer = mocker.Mock()
-        mock_encoding = mocker.Mock()
-        mock_encoding.input_ids = torch.tensor([[1, 2, 3]])
-        mock_encoding.attention_mask = torch.tensor([[1, 1, 1]])
-        mock_encoding.to = mocker.Mock(return_value=mock_encoding)
-        mock_tokenizer.return_value = mock_encoding
-        
-        # Mock Model
-        mock_model = mocker.Mock()
-        mock_outputs = mocker.Mock()
-        mock_outputs.logits = torch.tensor([[0.1, 5.0, 0.1]])  # Strong logits → softmax ~0.99 confidence
-        mock_model.return_value = mock_outputs
-        mock_model.to = mocker.Mock(return_value=mock_model)
-        mock_model.eval = mocker.Mock()
-        
-        return mock_tokenizer, mock_model
+    # Mock-Komponenten werden jetzt über conftest.py bereitgestellt
+    # via mock_tokenizer, mock_torch_model, classifier_with_mocks
     
-    @pytest.fixture
-    def mock_pdf_extractor(self, mocker):
-        """Mock für PDF-Extraktor."""
-        mock_extractor = mocker.Mock()
-        mock_extracted_content = mocker.Mock()
-        mock_extracted_content.text = "Test PDF Inhalt für Klassifikation"
-        mock_extracted_content.page_count = 3
-        mock_extracted_content.file_path = "test.pdf"
-        mock_extracted_content.metadata = {"title": "Test Document"}
-        mock_extracted_content.extraction_method = "mocked"
-        mock_extracted_content.chunking_enabled = False
-        mock_extracted_content.chunking_method = "none"
-        
-        mock_extractor.extract_text_from_pdf.return_value = mock_extracted_content
-        return mock_extractor
+    # PDF-Extractor Mock wird über conftest.py bereitgestellt
 
-    def test_classifier_initialization(self, mocker):
+    def test_classifier_initialization(self, non_lazy_models, mocker):
         """Test classifier initialization with model loading."""
         mock_model = mocker.MagicMock()
         mock_tokenizer = mocker.MagicMock()
         
-        mock_model_class = mocker.patch("bu_processor.pipeline.classifier.AutoModelForSequenceClassification")
-        mock_tokenizer_class = mocker.patch("bu_processor.pipeline.classifier.AutoTokenizer")
+        # Patch transformers before any imports
+        mock_model_class = mocker.patch("transformers.AutoModelForSequenceClassification")
+        mock_tokenizer_class = mocker.patch("transformers.AutoTokenizer")
         
         mock_model_class.from_pretrained.return_value = mock_model
         mock_tokenizer_class.from_pretrained.return_value = mock_tokenizer
@@ -78,7 +51,7 @@ class TestRealMLClassifier:
             device="cpu"
         )
         
-        # Check that from_pretrained was called
+        # Check that from_pretrained was called (expects non-lazy behavior)
         mock_model_class.from_pretrained.assert_called_once()
         mock_tokenizer_class.from_pretrained.assert_called_once()
 

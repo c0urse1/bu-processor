@@ -1,47 +1,76 @@
 #!/usr/bin/env python3
-"""Verify that conftest.py fixtures are working correctly."""
+"""Verify that conftest.py fixtures are working correctly - self-contained version."""
 
 import sys
+import os
 from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+def check_conftest_file_exists():
+    """Check if conftest.py file exists."""
+    try:
+        conftest_path = project_root / "tests" / "conftest.py"
+        if conftest_path.exists():
+            print("✓ conftest.py file exists")
+            return True
+        else:
+            print("✗ conftest.py file not found")
+            return False
+    except Exception as e:
+        print(f"✗ file check failed: {e}")
+        return False
+
 def check_conftest_imports():
     """Check if conftest.py can be imported."""
     try:
-        from tests.conftest import pytest_configure
+        # Set testing environment
+        os.environ["BU_LAZY_MODELS"] = "0"
+        os.environ["TESTING"] = "true"
+        
+        # Import conftest directly
+        conftest_path = project_root / "tests" / "conftest.py"
+        spec = __import__('importlib.util', fromlist=['spec_from_file_location']).spec_from_file_location("conftest", conftest_path)
+        conftest = __import__('importlib.util', fromlist=['module_from_spec']).module_from_spec(spec)
+        spec.loader.exec_module(conftest)
+        
         print("✓ conftest.py imports successfully")
-        return True
+        return True, conftest
     except Exception as e:
         print(f"✗ conftest.py import failed: {e}")
-        return False
+        return False, None
 
-def check_fixtures():
+def check_fixtures(conftest_module):
     """Check if key fixtures are defined."""
     try:
-        import pytest
-        from tests import conftest
-        
+        if not conftest_module:
+            return False
+            
         # Get all attributes from conftest
-        fixtures = [attr for attr in dir(conftest) 
-                   if hasattr(getattr(conftest, attr), '_pytestfixturefunction')]
+        fixtures = []
+        for attr_name in dir(conftest_module):
+            attr = getattr(conftest_module, attr_name)
+            if hasattr(attr, '_pytestfixturefunction'):
+                fixtures.append(attr_name)
         
-        required_fixtures = ['classifier_with_mocks', 'sample_pdf_path']
+        required_fixtures = ['classifier_with_mocks', 'sample_pdf_path', 'dummy_train_val']
         
         print("\nFound fixtures:")
         for fixture in fixtures:
             print(f"  - {fixture}")
         
         print(f"\nChecking required fixtures:")
+        missing_fixtures = []
         for req_fixture in required_fixtures:
             if req_fixture in fixtures:
                 print(f"✓ {req_fixture} found")
             else:
                 print(f"✗ {req_fixture} missing")
+                missing_fixtures.append(req_fixture)
         
-        return all(req in fixtures for req in required_fixtures)
+        return len(missing_fixtures) == 0
         
     except Exception as e:
         print(f"✗ fixture check failed: {e}")
@@ -52,8 +81,13 @@ def main():
     print("=== Conftest.py Verification ===")
     
     success = True
-    success &= check_conftest_imports()
-    success &= check_fixtures()
+    success &= check_conftest_file_exists()
+    
+    imports_ok, conftest_module = check_conftest_imports()
+    success &= imports_ok
+    
+    if imports_ok:
+        success &= check_fixtures(conftest_module)
     
     if success:
         print("\n✓ All checks passed! conftest.py is working correctly.")

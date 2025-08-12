@@ -183,6 +183,7 @@ class TestEnhancedPDFExtractor:
         assert result.extraction_method == "pypdf2"
         assert "PyPDF2 Seite" in result.text
     
+    @requires_tesseract
     def test_ocr_fallback(self, extractor, mocker, sample_pdf_path):
         """Test für OCR-Fallback bei bildbasierten PDFs."""
         # Mock OCR dependencies

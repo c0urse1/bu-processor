@@ -44,6 +44,18 @@ except ImportError:
 from .pdf_extractor import EnhancedPDFExtractor, ChunkingStrategy
 from .classifier import RealMLClassifier
 
+# Top-level imports for patch-friendly testing - keep these at module level
+# so tests can easily patch them with mocker.patch("bu_processor.pipeline.enhanced_integrated_pipeline.PineconeManager")
+try:
+    from .pinecone_integration import PineconeManager  # für Tests patchbar halten
+except ImportError:
+    PineconeManager = None  # type: ignore
+
+try:
+    from .chatbot_integration import ChatbotIntegration  # dto.
+except ImportError:
+    ChatbotIntegration = None  # type: ignore
+
 # Try to import optional dependencies
 try:
     from .pinecone_integration import PineconeManager, AsyncPineconeConfig, AsyncPineconePipeline

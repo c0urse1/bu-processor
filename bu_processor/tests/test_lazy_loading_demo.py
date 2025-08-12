@@ -172,5 +172,153 @@ class TestLazyLoadingApproaches:
         print("✅ Approach 5: Direct monkeypatch approach works!")
 
 
+class TestLazyLoadingControlFixtures:
+    """Test Suite demonstrating the new lazy loading control fixtures."""
+
+    def test_with_manual_loading(self, lazy_models, mocker):
+        """Test lazy loading mit manuellem Aufruf von ensure_models_loaded."""
+        # Mock transformers components
+        mock_model = mocker.MagicMock()
+        mock_tokenizer = mocker.MagicMock()
+        
+        mock_model_class = mocker.patch("transformers.AutoModelForSequenceClassification")
+        mock_tokenizer_class = mocker.patch("transformers.AutoTokenizer")
+        
+        mock_model_class.from_pretrained.return_value = mock_model
+        mock_tokenizer_class.from_pretrained.return_value = mock_tokenizer
+        
+        from bu_processor.pipeline.classifier import RealMLClassifier
+        
+        # Initialisierung mit lazy=True sollte NICHT from_pretrained aufrufen
+        classifier = RealMLClassifier(
+            model_name="bert-base-uncased",
+            device="cpu"
+        )
+        
+        # Bei lazy loading werden models NICHT sofort geladen
+        mock_model_class.from_pretrained.assert_not_called()
+        mock_tokenizer_class.from_pretrained.assert_not_called()
+        
+        # Models sollten None sein bei lazy loading
+        assert classifier.model is None
+        assert classifier.tokenizer is None
+        
+        # Manueller Aufruf löst das Loading aus
+        classifier.ensure_models_loaded()
+        
+        # Jetzt sollten from_pretrained aufgerufen worden sein
+        mock_model_class.from_pretrained.assert_called_once()
+        mock_tokenizer_class.from_pretrained.assert_called_once()
+
+    def test_lazy_loading_automatic_on_classify(self, lazy_models, mocker):
+        """Test dass lazy loading automatisch bei classify_text() ausgelöst wird."""
+        # Mock transformers components
+        mock_model = mocker.MagicMock()
+        mock_tokenizer = mocker.MagicMock()
+        
+        # Mock model outputs for classification
+        mock_output = mocker.MagicMock()
+        mock_output.logits = mocker.MagicMock()
+        mock_model.return_value = mock_output
+        
+        # Mock tokenizer outputs
+        mock_tokenizer.return_value = {
+            'input_ids': [[101, 102, 103]],
+            'attention_mask': [[1, 1, 1]]
+        }
+        
+        # Mock torch operations
+        mock_torch = mocker.patch("bu_processor.pipeline.classifier.torch")
+        mock_torch.no_grad.return_value.__enter__ = mocker.MagicMock()
+        mock_torch.no_grad.return_value.__exit__ = mocker.MagicMock()
+        mock_torch.tensor.return_value = mocker.MagicMock()
+        mock_torch.nn.functional.softmax.return_value = mocker.MagicMock()
+        mock_torch.nn.functional.softmax.return_value.cpu.return_value.numpy.return_value = [[0.3, 0.7]]
+        
+        mock_model_class = mocker.patch("transformers.AutoModelForSequenceClassification")
+        mock_tokenizer_class = mocker.patch("transformers.AutoTokenizer")
+        
+        mock_model_class.from_pretrained.return_value = mock_model
+        mock_tokenizer_class.from_pretrained.return_value = mock_tokenizer
+        
+        from bu_processor.pipeline.classifier import RealMLClassifier
+        
+        # Lazy loading - keine sofortigen from_pretrained Aufrufe
+        classifier = RealMLClassifier(
+            model_name="bert-base-uncased",
+            device="cpu"
+        )
+        
+        # Verify lazy initialization
+        mock_model_class.from_pretrained.assert_not_called()
+        mock_tokenizer_class.from_pretrained.assert_not_called()
+        
+        # First classify call should trigger model loading
+        result = classifier.classify_text("Test text for lazy loading")
+        
+        # Now models should be loaded automatically
+        mock_model_class.from_pretrained.assert_called_once()
+        mock_tokenizer_class.from_pretrained.assert_called_once()
+        
+        # Result should be valid
+        assert result is not None
+
+    def test_is_loaded_property_lazy_behavior(self, lazy_models, mocker):
+        """Test dass is_loaded property bei lazy loading korrekt funktioniert."""
+        # Mock transformers
+        mock_model = mocker.MagicMock()
+        mock_tokenizer = mocker.MagicMock()
+        
+        mock_model_class = mocker.patch("transformers.AutoModelForSequenceClassification")
+        mock_tokenizer_class = mocker.patch("transformers.AutoTokenizer")
+        
+        mock_model_class.from_pretrained.return_value = mock_model
+        mock_tokenizer_class.from_pretrained.return_value = mock_tokenizer
+        
+        from bu_processor.pipeline.classifier import RealMLClassifier
+        
+        # Lazy initialization
+        classifier = RealMLClassifier(
+            model_name="bert-base-uncased",
+            device="cpu"
+        )
+        
+        # Initially should not be loaded (lazy)
+        assert not classifier.is_loaded
+        
+        # Manually load models
+        classifier.ensure_models_loaded()
+        
+        # Now should be loaded
+        assert classifier.is_loaded
+
+    def test_non_lazy_behavior_for_comparison(self, non_lazy_models, mocker):
+        """Test non-lazy behavior als Vergleich zum lazy loading."""
+        # Mock transformers
+        mock_model = mocker.MagicMock()
+        mock_tokenizer = mocker.MagicMock()
+        
+        mock_model_class = mocker.patch("transformers.AutoModelForSequenceClassification")
+        mock_tokenizer_class = mocker.patch("transformers.AutoTokenizer")
+        
+        mock_model_class.from_pretrained.return_value = mock_model
+        mock_tokenizer_class.from_pretrained.return_value = mock_tokenizer
+        
+        from bu_processor.pipeline.classifier import RealMLClassifier
+        
+        # Non-lazy initialization should load immediately
+        classifier = RealMLClassifier(
+            model_name="bert-base-uncased",
+            device="cpu"
+        )
+        
+        # Models should be loaded immediately (non-lazy)
+        mock_model_class.from_pretrained.assert_called_once()
+        mock_tokenizer_class.from_pretrained.assert_called_once()
+        
+        # Should be loaded from the start
+        assert classifier.is_loaded
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

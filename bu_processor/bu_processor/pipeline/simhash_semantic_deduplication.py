@@ -120,18 +120,13 @@ class SemanticSimHashGenerator:
     
     def _normalize_text(self, text: str) -> str:
         """Normalize text for processing."""
-        return text.lower().strip()
+        return " ".join(text.lower().split())
     
-    def _extract_features(self, text: str, ngram_size: int) -> List[str]:
-        """Extract n-gram features from text."""
-        words = text.split()
-        if len(words) < ngram_size:
-            return [text] if text else ["empty"]
-        
-        features = []
-        for i in range(len(words) - ngram_size + 1):
-            features.append(' '.join(words[i:i + ngram_size]))
-        return features if features else [text]
+    def _extract_features(self, norm_text: str, n: int):
+        """Extract n-gram features from normalized text."""
+        toks = norm_text.split()
+        for i in range(max(0, len(toks) - n + 1)):
+            yield " ".join(toks[i:i+n])
     
     def generate(self, text: str) -> int:
         """Generate SimHash for text."""
@@ -298,7 +293,7 @@ class SemanticSimHashGenerator:
         return self._calculate_term_weight_cached(term, features_hash, avg_idf)
 
     def _generate_ngrams(self, text: str) -> List[str]:
-        normalized_text = self._normalize_text(text)
+        normalized_text = self._normalize_text_advanced(text)
         tokens = [token for token in normalized_text.split() if token not in self.stopwords and len(token) >= self.config['min_token_length']]
         
         if len(tokens) < self.ngram_size:
@@ -326,14 +321,15 @@ class SemanticSimHashGenerator:
         return list(set(ngrams))
 
     @lru_cache(maxsize=1024)
-    def _normalize_text(self, text: str) -> str:
+    def _normalize_text_advanced(self, text: str) -> str:
+        """Advanced normalization preserving important punctuation for insurance context."""
         normalized = text.lower().strip()
         # Bewahre wichtige Satzzeichen für Versicherungskontext
         normalized = re.sub(r'[^\w\s.,!?%-]', ' ', normalized)
         normalized = re.sub(r'\s+', ' ', normalized)
         return normalized
 
-    def _extract_features(self, text: str, n: int) -> List[Tuple[str, float]]:
+    def _extract_features_advanced(self, text: str, n: int) -> List[Tuple[str, float]]:
         """Extrahiert Features (n-grams) mit Gewichten für SimHash-Berechnung.
         
         Args:
@@ -773,10 +769,11 @@ def calculate_simhash(text: str, *, bit_size: Optional[int] = None, ngram_size: 
     """
     generator = SemanticSimHashGenerator(ngram_size=ngram_size or 3, bit_size=bit_size or 64)
     # We re-use private normalization/tokenization for consistency.
-    features = generator._extract_features(generator._normalize_text(text), generator.ngram_size)
+    features = list(generator._extract_features(generator._normalize_text(text), generator.ngram_size))
     # Basic SimHash logic (duplicated minimal subset to avoid building HierarchicalChunk).
     bit_accumulator = [0] * generator.bit_size
-    for feature, weight in features:
+    for feature in features:
+        weight = 1.0  # Default weight for backward compatibility
         token_hash = mmh3.hash(feature.encode('utf-8'), 42, signed=False) & ((1 << generator.bit_size) - 1)
         for i in range(generator.bit_size):
             bit = 1 if (token_hash >> i) & 1 else 0

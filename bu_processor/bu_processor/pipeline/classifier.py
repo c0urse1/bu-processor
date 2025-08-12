@@ -1,6 +1,7 @@
 """ML-basierter Dokumentklassifizierer mit Retry-Mechanismus und Batch-Verarbeitung."""
 
 import asyncio
+import math
 import os
 import random
 import sys
@@ -17,9 +18,12 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from ..core.logging_setup import get_logger
 from ..core.log_context import log_context, timed_operation
 
+# Konfiguration
+from ..core.config import get_config
+
 # Pydantic für Schema-Validation
 try:
-    from pydantic import BaseModel, Field, validator
+    from pydantic import BaseModel, Field, model_validator
     PYDANTIC_AVAILABLE = True
 except ImportError:
     PYDANTIC_AVAILABLE = False
@@ -51,53 +55,69 @@ logger = get_logger(__name__)
 
 if PYDANTIC_AVAILABLE:
     class ClassificationResult(BaseModel):
-        """Typisierte Klassifikationsergebnisse mit Pydantic-Validation"""
-        category: int = Field(..., ge=0, description="Predicted category (0-based)")
-        confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score (0-1)")
-        is_confident: bool = Field(..., description="Whether confidence meets threshold")
-        input_type: str = Field(..., description="Type of input processed")
-        text_length: Optional[int] = Field(None, ge=0, description="Length of processed text")
-        processing_time: Optional[float] = Field(None, ge=0.0, description="Processing time in seconds")
-        model_version: Optional[str] = Field(None, description="Model version used")
-        timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Processing timestamp")
-
-        @validator('confidence')
-        def validate_confidence(cls, v):
-            if not 0.0 <= v <= 1.0:
-                raise ValueError('Confidence must be between 0 and 1')
-            return v
+        """Eindeutige und robuste Klassifikationsergebnisse mit Pydantic v2"""
+        text: str = Field(description="Verarbeiteter Text")
+        category: Optional[int] = Field(None, description="Klassifikationskategorie (Index)")
+        confidence: float = Field(ge=0.0, le=1.0, description="Konfidenz-Score (0-1)")
+        error: Optional[str] = Field(None, description="Fehlermeldung falls aufgetreten")
+        is_confident: bool = Field(default=False, description="Ob Konfidenz über Threshold liegt")
+        metadata: dict = Field(default_factory=dict, description="Zusätzliche Metadaten")
+        success: bool = Field(default=True, description="Ob Klassifikation erfolgreich war")
+        label: Optional[str] = Field(None, description="Kategorie-Label als String")
+        
+        # Optional: Erweiterte Felder für Kompatibilität
+        input_type: str = Field(default="text", description="Art der Eingabe")
+        text_length: Optional[int] = Field(None, ge=0, description="Länge des verarbeiteten Texts")
+        processing_time: Optional[float] = Field(None, ge=0.0, description="Verarbeitungszeit in Sekunden")
+        model_version: Optional[str] = Field(None, description="Verwendete Modellversion")
+        timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Verarbeitungszeitpunkt")
 
     class PDFClassificationResult(ClassificationResult):
-        """Erweiterte PDF-spezifische Klassifikationsergebnisse"""
-        file_path: str = Field(..., description="Path to processed PDF file")
-        page_count: int = Field(..., ge=1, description="Number of pages in PDF")
-        extraction_method: str = Field(..., description="PDF extraction method used")
-        pdf_metadata: Optional[Dict[str, Any]] = Field(None, description="PDF metadata")
-        chunking_enabled: bool = Field(default=False, description="Whether chunking was used")
-        chunking_method: Optional[str] = Field(None, description="Chunking strategy applied")
+        """PDF-spezifische Klassifikationsergebnisse"""
+        file_path: str = Field(description="Pfad zur verarbeiteten PDF-Datei")
+        page_count: int = Field(ge=1, description="Anzahl Seiten in der PDF")
+        extraction_method: str = Field(description="Verwendete PDF-Extraktionsmethode")
+        pdf_metadata: Optional[Dict[str, Any]] = Field(None, description="PDF-Metadaten")
+        chunking_enabled: bool = Field(default=False, description="Ob Chunking verwendet wurde")
+        chunking_method: Optional[str] = Field(None, description="Angewandte Chunking-Strategie")
 
     class BatchClassificationResult(BaseModel):
-        """Batch-Klassifikationsergebnisse"""
-        total_processed: int = Field(..., ge=0, description="Total items processed")
-        successful: int = Field(..., ge=0, description="Successfully processed items")
-        failed: int = Field(..., ge=0, description="Failed items")
-        batch_time: float = Field(..., ge=0.0, description="Total batch processing time")
-        results: List[ClassificationResult] = Field(..., description="Individual results")
-        batch_id: Optional[str] = Field(None, description="Unique batch identifier")
+        """Robuste Batch-Klassifikationsergebnisse mit Validierung"""
+        total_processed: int = Field(ge=0, description="Gesamt verarbeitete Elemente")
+        successful: int = Field(ge=0, description="Erfolgreich verarbeitete Elemente")
+        failed: int = Field(ge=0, description="Fehlgeschlagene Elemente")
+        results: List[ClassificationResult] = Field(default_factory=list, description="Einzelergebnisse")
         
-        @validator('failed')
-        def validate_failed_count(cls, v, values):
-            if 'successful' in values and 'total_processed' in values:
-                if v + values['successful'] != values['total_processed']:
-                    raise ValueError('Failed + Successful must equal Total')
-            return v
+        # Optional: Erweiterte Felder
+        batch_time: Optional[float] = Field(None, ge=0.0, description="Gesamt-Batch-Verarbeitungszeit")
+        batch_id: Optional[str] = Field(None, description="Eindeutige Batch-Kennung")
+        
+        @property
+        def total(self) -> int:
+            """Alias für total_processed für Backward-Kompatibilität"""
+            return self.total_processed
+        
+        def model_dump(self, **kwargs) -> Dict[str, Any]:
+            """Override model_dump to include computed properties"""
+            data = super().model_dump(**kwargs)
+            data["total"] = self.total
+            return data
+        
+        @model_validator(mode="after")
+        def validate_counts(self):
+            """Validiert, dass die Zählungen konsistent sind"""
+            if self.successful + self.failed != self.total_processed:
+                raise ValueError(f"Failed ({self.failed}) + Successful ({self.successful}) must equal Total ({self.total_processed})")
+            if len(self.results) != self.total_processed:
+                raise ValueError(f"Results length ({len(self.results)}) must equal Total ({self.total_processed})")
+            return self
 
     class RetryStats(BaseModel):
-        """Retry-Statistiken"""
-        attempts: int = Field(..., ge=1, description="Number of attempts made")
-        total_delay: float = Field(..., ge=0.0, description="Total delay time")
-        final_success: bool = Field(..., description="Whether final attempt succeeded")
-        error_types: List[str] = Field(default_factory=list, description="Types of errors encountered")
+        """Retry-Statistiken mit Pydantic v2"""
+        attempts: int = Field(ge=1, description="Anzahl der Versuche")
+        total_delay: float = Field(ge=0.0, description="Gesamte Verzögerungszeit")
+        final_success: bool = Field(description="Ob der finale Versuch erfolgreich war")
+        error_types: List[str] = Field(default_factory=list, description="Arten der aufgetretenen Fehler")
 
 else:
     # Fallback für Pydantic-freie Umgebungen
@@ -313,6 +333,10 @@ class RealMLClassifier:
         - extract_multiple_pdfs(): Batch-PDF-Extraktion
     """
     
+    # Class attributes for test access
+    BatchClassificationResult = BatchClassificationResult
+    ClassificationResult = ClassificationResult
+    
     def __init__(
         self,
         model_path: str = ML_MODEL_PATH,
@@ -334,6 +358,10 @@ class RealMLClassifier:
             max_retries: Maximale Anzahl Wiederholungsversuche
             timeout_seconds: Timeout in Sekunden für Operations
         """
+        
+        # Lade Konfiguration für Confidence-Threshold
+        cfg = get_config()
+        self.confidence_threshold = cfg.ml_model.classifier_confidence_threshold
         
         self.device = torch.device('cuda' if torch.cuda.is_available() and USE_GPU else 'cpu')
         self.batch_size = batch_size
@@ -403,6 +431,109 @@ class RealMLClassifier:
                    timeout_seconds=timeout_seconds,
                    labels_available=self.labels is not None,
                    lazy_loading=not self.is_loaded)
+
+    @property
+    def is_loaded(self) -> bool:
+        """
+        Prüft ob Model und Tokenizer geladen sind.
+        
+        Returns:
+            True wenn beide Komponenten verfügbar sind, False sonst
+        """
+        return (self.model is not None and 
+                self.tokenizer is not None and 
+                hasattr(self.model, 'config'))
+
+    @staticmethod
+    def _softmax(logits: List[float]) -> List[float]:
+        """
+        Numerisch stabile Softmax-Berechnung.
+        
+        Args:
+            logits: Liste von Logit-Werten
+            
+        Returns:
+            Liste von Wahrscheinlichkeiten (summe = 1.0)
+        """
+        if not logits:
+            return []
+        
+        # Numerische Stabilität: subtrahiere das Maximum
+        max_logit = max(logits)
+        exps = [math.exp(x - max_logit) for x in logits]
+        
+        # Vermeide Division durch Null
+        sum_exps = sum(exps) or 1.0
+        
+        return [exp_val / sum_exps for exp_val in exps]
+
+    @staticmethod
+    def _clip01(x: float) -> float:
+        """
+        Clipped numerische Werte auf [0.0, 1.0] Bereich.
+        
+        Verhindert Rundungsfehler die zu confidence > 1.0 führen können.
+        
+        Args:
+            x: Numerischer Wert
+            
+        Returns:
+            Geclippter Wert zwischen 0.0 und 1.0
+        """
+        if x < 0.0:
+            return 0.0
+        if x > 1.0:
+            return 1.0
+        return x
+
+    def _postprocess_logits(self, logits: List[float], labels: List[str], text: str = "") -> 'ClassificationResult':
+        """
+        Verarbeitet Model-Logits zu einem ClassificationResult.
+        
+        Args:
+            logits: Model-Output-Logits
+            labels: Label-Liste entsprechend den Logits
+            text: Ursprünglicher Input-Text
+            
+        Returns:
+            ClassificationResult mit Softmax-Wahrscheinlichkeiten
+        """
+        if not logits or not labels or len(logits) != len(labels):
+            return ClassificationResult(
+                text=text,
+                category=None,
+                confidence=0.0,
+                error="Invalid logits or labels",
+                is_confident=False,
+                metadata={"logits_count": len(logits), "labels_count": len(labels)}
+            )
+        
+        # Softmax-Wahrscheinlichkeiten berechnen
+        probs = self._softmax(logits)
+        
+        # Beste Vorhersage finden
+        best_idx = max(range(len(probs)), key=lambda i: probs[i])
+        top_label = labels[best_idx]
+        top_prob = probs[best_idx]
+        
+        # Numerische Toleranz: Clip auf [0.0, 1.0] für Rundungsfehler
+        top_prob = self._clip01(top_prob)
+        
+        # Confidence-Threshold anwenden
+        is_confident = (top_prob >= self.confidence_threshold)
+        
+        return ClassificationResult(
+            text=text,
+            category=top_label,
+            confidence=top_prob,
+            error=None,
+            is_confident=is_confident,
+            metadata={
+                "all_probabilities": dict(zip(labels, [self._clip01(p) for p in probs])),
+                "confidence_threshold": self.confidence_threshold,
+                "softmax_applied": True
+            }
+        )
 
     def set_pdf_extractor(self, extractor) -> None:
         """Injiziert einen PDF-Extractor für bessere Testbarkeit.
@@ -583,6 +714,113 @@ class RealMLClassifier:
             "timeout_seconds": self.timeout_seconds
         }
 
+    @staticmethod
+    def _softmax(logits: List[float]) -> List[float]:
+        """
+        Numerisch stabile Softmax-Implementierung.
+        
+        Args:
+            logits: Liste der Logits vom Modell
+            
+        Returns:
+            Wahrscheinlichkeitsverteilung (summiert zu 1.0)
+        """
+        if not logits:
+            return []
+        
+        # Numerische Stabilität: subtrahiere das Maximum
+        m = max(logits)
+        exps = [math.exp(x - m) for x in logits]
+        s = sum(exps) or 1.0  # Verhindere Division durch 0
+        return [e / s for e in exps]
+
+    def _postprocess_logits(self, logits: List[float], labels: List[str], input_text: str = "") -> ClassificationResult:
+        """
+        Verarbeitet Modell-Logits zu ClassificationResult.
+        
+        Args:
+            logits: Rohe Logits vom Modell
+            labels: Liste der Label-Namen
+            input_text: Ursprünglicher Input-Text
+            
+        Returns:
+            ClassificationResult mit konfigurierbarem Threshold
+        """
+        probs = self._softmax(logits)
+        
+        if not probs:
+            return ClassificationResult(
+                text=input_text,
+                category=None,
+                confidence=0.0,
+                error="No logits provided",
+                is_confident=False
+            )
+        
+        # Finde Label mit höchster Wahrscheinlichkeit
+        idx = max(range(len(probs)), key=lambda i: probs[i])
+        top_label = labels[idx] if idx < len(labels) else None
+        top_prob = probs[idx]
+        
+        # Numerische Toleranz: Clip auf [0.0, 1.0] für Rundungsfehler
+        top_prob = self._clip01(top_prob)
+        
+        return ClassificationResult(
+            text=input_text,
+            category=top_label,
+            confidence=top_prob,
+            is_confident=(top_prob >= self.confidence_threshold),
+            metadata={
+                "all_probabilities": dict(zip(labels, [self._clip01(p) for p in probs])) if len(labels) == len(probs) else {},
+                "threshold_used": self.confidence_threshold
+            }
+        )
+
+    def _forward_logits(self, text: str) -> List[float]:
+        """
+        Führt Forward-Pass durch das Modell aus.
+        
+        Args:
+            text: Input-Text
+            
+        Returns:
+            Liste der Logits
+        """
+        # Sicherstellen, dass Modell geladen ist
+        if not self.is_loaded:
+            self._load_model_and_tokenizer()
+        
+        # Tokenization
+        inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=MAX_SEQUENCE_LENGTH
+        ).to(self.device)
+        
+        # Forward pass
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            logits = outputs.logits[0].cpu().numpy().tolist()
+        
+        return logits
+
+    def _label_list(self) -> List[str]:
+        """
+        Gibt die verfügbaren Labels zurück.
+        
+        Returns:
+            Liste der Label-Namen
+        """
+        if self.labels:
+            return self.labels
+        elif hasattr(self.model, 'config') and hasattr(self.model.config, 'id2label'):
+            return [self.model.config.id2label[i] for i in range(len(self.model.config.id2label))]
+        else:
+            # Fallback für unbekannte Modelle
+            return [f"label_{i}" for i in range(self.model.config.num_labels if hasattr(self.model, 'config') else 2)]
+
     @with_retry_and_timeout(max_retries=3, timeout_seconds=30.0)
     def classify_text(self, text: str) -> Union[Dict[str, Any], ClassificationResult]:
         """Klassifiziert den Input-Text in vordefinierte Kategorien.
@@ -591,123 +829,115 @@ class RealMLClassifier:
             text: Rohtext, der klassifiziert werden soll
             
         Returns:
-            Ein Dict mit Kategorie-Namen und Wahrscheinlichkeiten oder 
-            ClassificationResult Pydantic-Model falls verfügbar
+            ClassificationResult mit konfigurierbarem Threshold
             
         Raises:
             ClassificationRetryError: Nach fehlgeschlagenen Retry-Versuchen
         """
-        start_time = time.time()
+        try:
+            # Führe Modell-Inferenz durch
+            logits = self._forward_logits(text)
+            labels = self._label_list()
+            
+            # Verarbeite Ergebnisse mit konfigurierbarem Threshold
+            result = self._postprocess_logits(logits, labels, text)
+            
+            # Zusätzliche Metadaten hinzufügen
+            result.input_type = "text"
+            result.text_length = len(text)
+            result.processing_time = time.time() - time.time()  # Wird überschrieben vom Retry-Wrapper
+            result.model_version = "v1.0"
+            
+            return result
+            
+        except Exception as e:
+            # Fallback bei Fehlern
+            return ClassificationResult(
+                text=text,
+                category=None,
+                confidence=0.0,
+                error=str(e),
+                is_confident=False,
+                metadata={"error_type": type(e).__name__}
+            )
 
-        # Ensure model loaded (lazy mode)
-        self._load_model_and_tokenizer()
-
-        inputs = self.tokenizer(
-            text,
-            padding=True,
-            truncation=True,
-            max_length=MAX_SEQUENCE_LENGTH,
-            return_tensors="pt"
-        )
-        inputs = self._normalize_tokenizer_output(inputs)
+    def classify_batch(self, texts: List[str]) -> BatchClassificationResult:
+        """
+        Robuste Batch-Klassifikation mit korrekter Zählung und Sanity-Guards.
         
-        # Sichere device move für alle Tensoren
-        if hasattr(self, "device"):
-            for k, v in list(inputs.items()):
-                try:
-                    inputs[k] = v.to(self.device)
-                except Exception:
-                    pass  # bei Mocks ohne .to() Methode
-
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            # Verbesserte Tensor-Verarbeitung
-            logits = outputs.logits
-            probs = torch.softmax(logits, dim=-1)
-
-        confidence, prediction = torch.max(probs, dim=-1)
-        confidence_value = float(confidence.item())
-        predicted_category = int(prediction.item())
-        is_confident = confidence_value >= CONFIDENCE_THRESHOLD
-
-        processing_time = time.time() - start_time
-
-        result_data = {
-            "category": predicted_category,
-            "category_label": self.get_category_label(predicted_category),
-            "confidence": confidence_value,
-            "is_confident": is_confident,
-            "input_type": "text",
-            "text_length": len(text),
-            "processing_time": processing_time,
-            "model_version": "v1.0"
-        }
-
-        if PYDANTIC_AVAILABLE:
-            return ClassificationResult(**result_data)
-        return result_data
-
-    def classify_batch(
-        self, 
-        texts: List[str], 
-        batch_id: Optional[str] = None
-    ) -> Union[Dict[str, Any], BatchClassificationResult]:
-        """Batch-Klassifikation für bessere Performance bei vielen Texten.
+        SANITY-GUARDS:
+        - len(results) == len(texts) wird IMMER sichergestellt
+        - successful aus results abgeleitet, failed = total - successful  
+        - Keine "freien" Zuweisungen an successful/failed
         
         Args:
             texts: Liste von Texten zur Klassifikation
-            batch_id: Optionale eindeutige Batch-ID für Logging
             
         Returns:
-            BatchClassificationResult mit aggregierten Ergebnissen
+            BatchClassificationResult mit validierter Zählung
             
         Raises:
-            ValueError: Falls keine Texte übergeben werden
+            TypeError: Falls texts keine Liste ist
+            ValueError: Falls texts leer ist
         """
+        if not isinstance(texts, list):
+            raise TypeError("texts must be a list[str]")
+        
         if not texts:
-            raise ValueError("Keine Texte für Batch-Klassifikation übergeben")
+            raise ValueError("texts list cannot be empty")
         
-        start_time = time.time()
-        batch_id = batch_id or f"batch_{int(time.time())}"
+        results: List[ClassificationResult] = []
+        total_processed = len(texts)
         
-        logger.info(f"Batch-Klassifikation gestartet - Batch Size: {len(texts)}, Batch ID: {batch_id}")
-        
-        results = []
-        successful = 0
-        failed = 0
-        
-        # Verarbeite in Batches der konfigurierten Größe
-        for i in range(0, len(texts), self.batch_size):
-            batch_texts = texts[i:i + self.batch_size]
-            batch_results = self._process_text_batch(batch_texts, i)
-            
-            for result in batch_results:
-                if isinstance(result, dict) and "error" in result:
-                    failed += 1
-                else:
-                    successful += 1
+        # SANITY-GUARD: Verarbeite jeden Text einzeln, garantiere 1:1 Mapping
+        for text in texts:
+            try:
+                result = self.classify_text(text)
                 results.append(result)
+            except Exception as e:
+                # Erstelle Error-Result - immer ein Result pro Text
+                error_result = ClassificationResult(
+                    text=text,
+                    category=None,
+                    confidence=0.0,
+                    error=str(e),
+                    is_confident=False,
+                    metadata={"error_type": type(e).__name__}
+                )
+                results.append(error_result)
         
-        total_time = time.time() - start_time
+        # SANITY-GUARD: Stelle sicher dass len(results) == len(texts)
+        if len(results) != total_processed:
+            # Fallback: Fülle fehlende Results mit Errors auf
+            missing_count = total_processed - len(results)
+            for i in range(missing_count):
+                fallback_result = ClassificationResult(
+                    text=f"missing_text_{i}",
+                    category=None,
+                    confidence=0.0,
+                    error="Missing result - sanity guard triggered",
+                    is_confident=False,
+                    metadata={"sanity_guard": True, "missing_index": i}
+                )
+                results.append(fallback_result)
         
-        logger.info(
-            f"Batch-Klassifikation abgeschlossen - "
-            f"Total: {len(texts)}, "
-            f"Successful: {successful}, "
-            f"Failed: {failed}, "
-            f"Time: {total_time:.2f}s"
+        # SANITY-GUARD: Zählung AUS results ableiten - nie "frei" zuweisen
+        successful = sum(1 for r in results if r.error is None)
+        failed = total_processed - successful
+        
+        # FINAL SANITY-GUARD: Validiere Zählungen
+        if len(results) != total_processed:
+            raise RuntimeError(f"Sanity check failed: len(results)={len(results)} != total_processed={total_processed}")
+        
+        if successful + failed != total_processed:
+            raise RuntimeError(f"Counting mismatch: successful({successful}) + failed({failed}) != total({total_processed})")
+        
+        return BatchClassificationResult(
+            total_processed=total_processed,
+            successful=successful,
+            failed=failed,
+            results=results
         )
-        
-        result_data = {
-            "total_processed": len(texts),
-            "successful": successful,
-            "failed": failed,
-            "batch_time": total_time,
-            "results": results,
-            "batch_id": batch_id
-        }
-        
-        # Konsistente Batch-Ergebnis-Schema (verhindert Pydantic-Fehler)
         if PYDANTIC_AVAILABLE:
             # Normalisiere results für Pydantic-Validierung
             normalized_results = []
@@ -769,11 +999,19 @@ class RealMLClassifier:
 
             confidences, predictions = torch.max(probs, dim=-1)
             
+            # SANITY-GUARD: Stelle sicher dass Batch-Größen übereinstimmen
+            if len(texts) != len(confidences) or len(texts) != len(predictions):
+                raise RuntimeError(f"Batch size mismatch: texts={len(texts)}, confidences={len(confidences)}, predictions={len(predictions)}")
+            
             # Erstelle Ergebnisse für jeden Text im Batch
             results = []
             for i, (text, confidence, prediction) in enumerate(zip(texts, confidences, predictions)):
                 confidence_value = float(confidence.item())
                 predicted_category = int(prediction.item())
+                
+                # Numerische Toleranz: Clip confidence auf [0.0, 1.0]
+                confidence_value = self._clip01(confidence_value)
+                
                 is_confident = confidence_value >= CONFIDENCE_THRESHOLD
                 
                 result_data = {
@@ -792,12 +1030,16 @@ class RealMLClassifier:
                 else:
                     results.append(result_data)
             
+            # SANITY-GUARD: Stelle sicher dass results.length == texts.length
+            if len(results) != len(texts):
+                raise RuntimeError(f"Results count mismatch: results={len(results)}, texts={len(texts)}")
+            
             logger.debug(f"Batch verarbeitet", batch_size=len(texts))
             return results
             
         except Exception as e:
             logger.error(f"Batch-Verarbeitung fehlgeschlagen: {e}", exc_info=True)
-            # Erstelle Fehler-Ergebnisse für alle Texte im Batch
+            # SANITY-GUARD: Erstelle EXAKT ein Fehler-Result pro Text
             error_results = []
             for i, text in enumerate(texts):
                 error_result = {
@@ -810,6 +1052,10 @@ class RealMLClassifier:
                     "is_confident": False
                 }
                 error_results.append(error_result)
+            
+            # SANITY-GUARD: Stelle sicher dass error_results.length == texts.length  
+            if len(error_results) != len(texts):
+                raise RuntimeError(f"Error results count mismatch: error_results={len(error_results)}, texts={len(texts)}")
             
             return error_results
 
