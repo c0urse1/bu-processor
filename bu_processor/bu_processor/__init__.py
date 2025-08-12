@@ -18,6 +18,10 @@ Version: 0.1.0
 """
 
 __version__ = "0.1.0"
+
+# Konfiguriere strukturiertes Logging beim Package-Import
+from .core.logging_setup import configure_logging
+configure_logging()
 __author__ = "BU-Processor Team"
 __email__ = "team@bu-processor.local"
 

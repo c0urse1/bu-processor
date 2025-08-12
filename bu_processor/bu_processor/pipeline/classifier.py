@@ -1,7 +1,6 @@
 """ML-basierter Dokumentklassifizierer mit Retry-Mechanismus und Batch-Verarbeitung."""
 
 import asyncio
-import logging
 import os
 import random
 import sys
@@ -13,6 +12,10 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+# Strukturiertes Logging
+from ..core.logging_setup import get_logger
+from ..core.log_context import log_context, timed_operation
 
 # Pydantic für Schema-Validation
 try:
@@ -41,7 +44,8 @@ except ImportError:  # pragma: no cover - final fallback
 
 from .pdf_extractor import EnhancedPDFExtractor, ExtractedContent, DocumentChunk, ChunkingStrategy
 
-logger = logging.getLogger(__name__)
+# Strukturierter Logger für das gesamte Modul
+logger = get_logger(__name__)
 
 # === PYDANTIC SCHEMA-MODELLE ===
 
@@ -184,7 +188,11 @@ def with_retry_and_timeout(
                     error_type = type(e).__name__
                     retry_stats['error_types'].append(error_type)
                     
-                    logger.warning(f"Attempt {attempt + 1} failed for {func.__name__}: {e} ({error_type})")
+                    logger.warning("retry attempt failed", 
+                                 attempt=attempt + 1,
+                                 function=func.__name__,
+                                 error=str(e),
+                                 error_type=error_type)
                     
                     # Letzter Versuch - keine weitere Verzögerung
                     if attempt == max_retries:
@@ -199,13 +207,19 @@ def with_retry_and_timeout(
                     
                     retry_stats['total_delay'] += delay
                     
-                    logger.info(f"Retrying in {delay:.2f}s - Attempt {attempt + 1}/{max_retries}")
+                    logger.info("retry delay", 
+                              delay_seconds=round(delay, 2),
+                              attempt=attempt + 1,
+                              max_retries=max_retries)
                     
                     time.sleep(delay)
                 
                 except Exception as e:
                     # Unerwarteter Fehler - sofort abbrechen
-                    logger.error(f"Unexpected error in {func.__name__}: {e}", exc_info=True)
+                    logger.error("unexpected error in retry", 
+                               function=func.__name__,
+                               error=str(e),
+                               error_type=type(e).__name__)
                     raise
             
             # Alle Versuche fehlgeschlagen
@@ -215,7 +229,12 @@ def with_retry_and_timeout(
                 f"in {total_time:.2f}s. Last error: {last_exception}"
             )
             
-            logger.error(f"All retry attempts failed for {func.__name__}: {retry_stats['attempts']} attempts in {total_time:.2f}s, errors: {retry_stats['error_types']}")
+            logger.error("all retry attempts failed", 
+                        function=func.__name__,
+                        attempts=retry_stats['attempts'],
+                        duration_seconds=round(total_time, 2),
+                        error_types=retry_stats['error_types'],
+                        last_error=str(last_exception))
             
             raise retry_error from last_exception
         
@@ -357,28 +376,33 @@ class RealMLClassifier:
                 if os.path.exists(labels_path):
                     with open(labels_path, "r", encoding="utf-8") as f:
                         self.labels = [line.strip() for line in f if line.strip()]
-                    logger.info(f"Labels geladen: {len(self.labels)} Kategorien")
+                    logger.info("labels loaded", 
+                              labels_count=len(self.labels),
+                              source=labels_path)
             
-            logger.info(f"Model direkt geladen in __init__: {model_path_to_use}")
+            logger.info("model loaded directly in init", 
+                       model_path=str(model_path_to_use),
+                       device=str(self.device))
         else:
             self.model = None  # type: ignore
             self.tokenizer = None  # type: ignore
-            logger.info("Classifier initialized in lazy mode - model load deferred",
-                        model_dir=self.model_dir, model_name=self.model_name)
+            logger.info("classifier initialized in lazy mode", 
+                       model_dir=str(self.model_dir),
+                       model_name=self.model_name,
+                       device=str(self.device))
         
         # PDF-Extraktion wird nun außerhalb des Klassifikators gehandhabt
         # (Single Responsibility Principle)
         
-        logger.info(
-            f"Enhanced Classifier initialisiert - "
-            f"Device: {self.device}, "
-            f"Model Dir: {self.model_dir}, "
-            f"Model Name: {self.model_name}, "
-            f"Batch Size: {batch_size}, "
-            f"Max Retries: {max_retries}, "
-            f"Timeout: {timeout_seconds}s, "
-            f"Labels Available: {self.labels is not None}"
-        )
+        logger.info("enhanced classifier initialized", 
+                   device=str(self.device),
+                   model_dir=str(self.model_dir),
+                   model_name=self.model_name,
+                   batch_size=batch_size,
+                   max_retries=max_retries,
+                   timeout_seconds=timeout_seconds,
+                   labels_available=self.labels is not None,
+                   lazy_loading=not self.is_loaded)
 
     def set_pdf_extractor(self, extractor) -> None:
         """Injiziert einen PDF-Extractor für bessere Testbarkeit.
@@ -387,7 +411,8 @@ class RealMLClassifier:
             extractor: PDF-Extractor Instanz mit extract_text_from_pdf Methode
         """
         self.pdf_extractor = extractor
-        logger.debug(f"PDF-Extractor injiziert: {type(extractor).__name__}")
+        logger.debug("pdf extractor injected", 
+                    extractor_type=type(extractor).__name__)
 
     @with_retry_and_timeout(max_retries=2, timeout_seconds=60.0)
     def _initialize_model(self, legacy_model_path: str, model_dir: str, model_name: str) -> None:
