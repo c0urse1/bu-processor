@@ -21,21 +21,24 @@ __version__ = "0.1.0"
 __author__ = "BU-Processor Team"
 __email__ = "team@bu-processor.local"
 
-from .core.config import get_config, settings
+from .core.config import get_config  # lazy loading function only
 from .pipeline.simhash_semantic_deduplication import (
     EnhancedDeduplicationEngine,
     SemanticDuplicateDetector,
     SemanticSimHashGenerator,
 )
+# Convenient imports - lazy loaded
+def get_settings():
+    """Get settings instance lazily."""
+    return get_config()
 
-# Convenient imports
-config = settings
+config = get_settings  # function reference for lazy loading
 
 __all__ = [
     "__version__",
-    "__author__",
+    "__author__", 
     "__email__",
-    "settings",
+    "get_settings",
     "config",
     "get_config",
     "EnhancedDeduplicationEngine",

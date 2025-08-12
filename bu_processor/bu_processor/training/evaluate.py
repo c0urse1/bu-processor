@@ -1,10 +1,10 @@
 import pandas as pd
 from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer
-from .config import TrainConfig
+from .config import TrainingConfig
 from .metrics import compute_metrics
 
-def evaluate(cfg: TrainConfig, model_dir: str, test_path: str):
+def evaluate(cfg: TrainingConfig, model_dir: str, test_path: str):
     df = pd.read_csv(test_path)
     ds = Dataset.from_pandas(df)
     tok = AutoTokenizer.from_pretrained(model_dir, use_fast=True)

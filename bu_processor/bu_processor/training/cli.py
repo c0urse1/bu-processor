@@ -1,5 +1,5 @@
 import argparse, json
-from .config import TrainConfig
+from .config import TrainingConfig
 from .train import train
 from .evaluate import evaluate
 
@@ -11,7 +11,7 @@ def main():
     parser.add_argument("--test_path", type=str, default="data/test.csv")
     args = parser.parse_args()
 
-    cfg = TrainConfig()  # optional: YAML einlesen und mergen
+    cfg = TrainingConfig()  # optional: YAML einlesen und mergen
 
     if args.train:
         out = train(cfg)

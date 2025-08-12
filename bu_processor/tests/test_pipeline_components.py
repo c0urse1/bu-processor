@@ -9,9 +9,6 @@ from typing import Dict, List, Any
 import pytest
 
 # Import der zu testenden Klassen
-import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
 try:
     from bu_processor.pipeline.pinecone_integration import (
         PineconeManager, VectorSearchResult, DocumentEmbedding

@@ -1,0 +1,11 @@
+text,label
+"This is a sample training text for classification",0
+"Another example text for model training",1
+"Machine learning is fascinating",0
+"Deep learning models require lots of data",1
+"Natural language processing is useful",0
+"Text classification is important",1
+"Data preprocessing improves results",0
+"Model evaluation is crucial",1
+"Feature engineering helps performance",0
+"Neural networks are powerful",1

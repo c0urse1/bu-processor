@@ -3,10 +3,10 @@ from typing import List, Optional
 from pathlib import Path
 
 # Bestimme Projektroot basierend auf der Position dieser Datei
-# config.py liegt in bu_processor/training/, also 3 Ebenen hoch zum Projektroot
-PROJECT_ROOT = Path(__file__).resolve().parents[2]  # 2 Ebenen hoch: training -> bu_processor -> projektroot
+# config.py liegt in bu_processor/training/, also 2 Ebenen hoch zum Projektroot
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # 2 Ebenen hoch: training -> bu_processor -> projektroot (bu_processor)
 
-class TrainConfig(BaseModel):
+class TrainingConfig(BaseModel):
     # Daten - robuste Pfade relativ zum Projektroot
     train_path: str = str(PROJECT_ROOT / "data" / "train.csv")
     val_path: str = str(PROJECT_ROOT / "data" / "val.csv")

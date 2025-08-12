@@ -1,4 +1,4 @@
-"""Tests für Enhanced PDF-Extraktor mit Chunking und OCR."""
+"""Tests für PDF-Extraktor-Funktionalität."""
 
 import os
 import tempfile
@@ -7,10 +7,10 @@ from unittest.mock import Mock, patch, MagicMock, mock_open
 
 import pytest
 
-# Import der zu testenden Klassen
-import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# Import des OCR-Skip-Decorators für Tests, die echtes OCR benötigen
+from .conftest import requires_tesseract
 
+# Import der zu testenden Klassen
 from bu_processor.pipeline.pdf_extractor import (
     EnhancedPDFExtractor,
     ExtractedContent,

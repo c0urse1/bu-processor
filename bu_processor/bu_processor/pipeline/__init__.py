@@ -6,15 +6,24 @@ Core document processing pipeline including PDF extraction,
 classification, semantic analysis, and deduplication.
 """
 
-# Core Pipeline Components
+"""
+BU-Processor Pipeline Module
+===========================
+
+Core document processing pipeline including PDF extraction, 
+classification, semantic analysis, and deduplication.
+"""
+
+# Core Pipeline Components (always safe to import)
 from .classifier import RealMLClassifier
 from .pdf_extractor import EnhancedPDFExtractor, ChunkingStrategy
 try:
     from .content_types import ContentType
 except Exception:  # pragma: no cover
     from enum import Enum as _Enum
-    class ContentType(_Enum):  # Minimal fallback (should not normally trigger)
+    class ContentType(_Enum):  # Minimal fallback
         UNKNOWN = "unknown"
+
 from .enhanced_integrated_pipeline import (
     EnhancedIntegratedPipeline,
     process_documents_multiprocessing,
@@ -45,14 +54,22 @@ try:
 except ImportError:
     SEMANTIC_ENHANCEMENT_AVAILABLE = False
 
-# Deduplication
+# Deduplication (only import on demand to avoid heavy dependencies)
 try:
-    from .simhash_semantic_deduplication import SemanticDeduplicator
+    # Only import when explicitly needed
     DEDUPLICATION_AVAILABLE = True
 except ImportError:
     DEDUPLICATION_AVAILABLE = False
 
-# Vector DB Integration
+def get_semantic_deduplicator():
+    """Lazy import of SemanticDeduplicator to avoid heavy dependencies at import time."""
+    try:
+        from .simhash_semantic_deduplication import SemanticDeduplicator
+        return SemanticDeduplicator
+    except ImportError:
+        return None
+
+# Vector DB Integration  
 try:
     from .pinecone_integration import PineconeManager
     PINECONE_AVAILABLE = True
@@ -71,18 +88,20 @@ except ImportError:
 __all__ = [
     # Core Components
     "RealMLClassifier",
-    "EnhancedPDFExtractor",
+    "EnhancedPDFExtractor", 
     "ChunkingStrategy",
     "ContentType",
     "EnhancedIntegratedPipeline",
     "process_documents_multiprocessing",
+    # Functions
+    "get_semantic_deduplicator",
 ]
 
 # Add optional components based on availability
 if CHATBOT_AVAILABLE:
     __all__.extend([
         "BUProcessorChatbot",
-        "ChatbotConfig",
+        "ChatbotConfig", 
         "ChatbotCLI",
     ])
 
@@ -95,9 +114,6 @@ if SECURE_CHATBOT_AVAILABLE:
 
 if SEMANTIC_ENHANCEMENT_AVAILABLE:
     __all__.append("SemanticClusteringEnhancer")
-
-if DEDUPLICATION_AVAILABLE:
-    __all__.append("SemanticDeduplicator")
 
 # PineconeManager is always available (either real or dummy)
 __all__.append("PineconeManager")

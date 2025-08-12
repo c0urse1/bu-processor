@@ -7,6 +7,9 @@ Additional bootstrap added automatically:
 """
 
 import os
+# Einheitliche Testumgebung - Fix #11: Stabilität durch frühe Umgebungseinstellung
+os.environ.setdefault("TESTING", "true")
+os.environ.setdefault("BU_LAZY_MODELS", "0")
 import sys
 import tempfile
 from pathlib import Path
@@ -16,52 +19,15 @@ from unittest.mock import Mock, MagicMock
 import pytest
 import torch
 
+# Try to import pandas for training test fixtures
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+
 
 # === PROJEKT-WEITE FIXTURES ===
-
-@pytest.fixture
-def sample_pdf_path(test_data_dir):
-    """Pfad zur Sample-PDF-Datei."""
-    return test_data_dir / "sample.pdf"
-
-
-@pytest.fixture
-def classifier_with_mocks(mocker, mock_tokenizer, mock_torch_model):
-    """Vollständig gemockter RealMLClassifier für Tests."""
-    # Setup mock components
-    mock_tokenizer_instance = mock_tokenizer()
-    mock_model_instance = mock_torch_model()
-    
-    # Mock AutoTokenizer und AutoModel imports
-    mocker.patch("bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
-                 return_value=mock_tokenizer_instance)
-    mocker.patch("bu_processor.pipeline.classifier.AutoModelForSequenceClassification.from_pretrained", 
-                 return_value=mock_model_instance)
-    
-    # Mock PyTorch device detection
-    mocker.patch("torch.cuda.is_available", return_value=False)
-    
-    # Mock PDF Extractor
-    mock_pdf_extractor = mocker.Mock()
-    mock_extracted_content = mocker.Mock()
-    mock_extracted_content.text = "Test PDF Inhalt für Klassifikation"
-    mock_extracted_content.page_count = 3
-    mock_extracted_content.file_path = "test.pdf"
-    mock_extracted_content.metadata = {"title": "Test Document"}
-    mock_extracted_content.extraction_method = "mocked"
-    mock_extracted_content.chunking_enabled = False
-    mock_extracted_content.chunking_method = "none"
-    
-    mock_pdf_extractor.extract_text_from_pdf.return_value = mock_extracted_content
-    mocker.patch("bu_processor.pipeline.classifier.EnhancedPDFExtractor", 
-                 return_value=mock_pdf_extractor)
-    
-    # Import und erstelle Classifier
-    from bu_processor.pipeline.classifier import RealMLClassifier
-    classifier = RealMLClassifier()
-    
-    return classifier
-
 
 @pytest.fixture(scope="session")
 def project_root():
@@ -77,14 +43,35 @@ if str(_root) not in sys.path:
 # Test environment flags (used by pinecone_integration, classifier, etc.)
 os.environ.setdefault("PYTEST_RUNNING", "1")
 os.environ.setdefault("ALLOW_EMPTY_PINECONE_KEY", "1")
-os.environ.setdefault("BU_LAZY_MODELS", "1")
+# Note: BU_LAZY_MODELS already set to "0" at top of file for stability
 
 # Provide a tiny default model name to avoid large downloads if code checks env
 os.environ.setdefault("BUPROC_MODEL_NAME", "sshleifer/tiny-distilroberta-base")
 
-def pytest_configure(config):  # noqa: D401
-    """Pytest hook to mark that test config was applied."""
-    os.environ["PYTEST_CONFIGURED"] = "1"
+
+@pytest.fixture
+def disable_lazy_loading(monkeypatch):
+    """Fixture to disable lazy loading for tests that need immediate from_pretrained calls.
+    
+    Use this fixture in tests that want to assert on AutoTokenizer.from_pretrained 
+    or AutoModel.from_pretrained calls immediately after classifier creation.
+    
+    Example:
+        def test_something(disable_lazy_loading, mocker):
+            # Now classifier will load model immediately
+            pass
+    """
+    monkeypatch.setenv("BU_LAZY_MODELS", "0")
+
+
+@pytest.fixture
+def enable_lazy_loading(monkeypatch):
+    """Fixture to explicitly enable lazy loading (default behavior).
+    
+    Use this when you want to be explicit about lazy loading being enabled,
+    or to override a previous disable_lazy_loading in the same test session.
+    """
+    monkeypatch.setenv("BU_LAZY_MODELS", "1")
 
 
 @pytest.fixture(scope="session") 
@@ -124,7 +111,180 @@ def sample_classification_results():
     ]
 
 
+@pytest.fixture
+def sample_pdf_path(test_data_dir):
+    """Sample PDF path for tests."""
+    pdf_path = test_data_dir / "sample.pdf"
+    
+    # Ensure the fixtures directory exists
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create a minimal PDF file for testing if it doesn't exist
+    if not pdf_path.exists():
+        pdf_path.write_text("Mock PDF content for testing")
+    
+    return pdf_path
+
+
 # === MOCK FACTORIES ===
+
+@pytest.fixture
+def classifier_with_mocks(mocker):
+    """Create a classifier with mocked ML model dependencies."""
+    # Mock torch first to avoid import issues
+    mock_torch = mocker.patch("bu_processor.pipeline.classifier.torch")
+    mock_torch.no_grad.return_value.__enter__ = mocker.MagicMock()
+    mock_torch.no_grad.return_value.__exit__ = mocker.MagicMock()
+    mock_torch.tensor.return_value = mocker.MagicMock()
+    mock_torch.nn.functional.softmax.return_value = mocker.MagicMock()
+    mock_torch.nn.functional.softmax.return_value.cpu.return_value.numpy.return_value = [[0.45, 0.55]]
+    
+    # Mock the transformer models
+    mock_model = mocker.MagicMock()
+    mock_tokenizer = mocker.MagicMock()
+    
+    # Mock the from_pretrained methods
+    mocker.patch("bu_processor.pipeline.classifier.AutoModelForSequenceClassification.from_pretrained", 
+                 return_value=mock_model)
+    mocker.patch("bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
+                 return_value=mock_tokenizer)
+    
+    # Configure mock tokenizer behavior
+    mock_tokenizer.return_value = {
+        'input_ids': [[101, 102, 103]],
+        'attention_mask': [[1, 1, 1]]
+    }
+    mock_tokenizer.__call__ = mocker.MagicMock(return_value={
+        'input_ids': [[101, 102, 103]],
+        'attention_mask': [[1, 1, 1]]
+    })
+    
+    # Configure mock model behavior
+    mock_output = mocker.MagicMock()
+    mock_output.logits = [[0.1, 0.9]]
+    mock_model.return_value = mock_output
+    mock_model.__call__ = mocker.MagicMock(return_value=mock_output)
+    
+    from bu_processor.pipeline.classifier import RealMLClassifier
+    
+    classifier = RealMLClassifier(
+        model_name="bert-base-uncased",
+        device="cpu"
+    )
+    
+    # Set the mocked objects
+    classifier.model = mock_model
+    classifier.tokenizer = mock_tokenizer
+    
+    # Mock the _process_batch method for batch operations
+    def mock_process_batch(texts):
+        results = []
+        for text in texts:
+            results.append({
+                "label": "Category_A" if len(text) % 2 == 0 else "Category_B",
+                "confidence": 0.85,
+                "success": True,
+                "probabilities": {"Category_A": 0.85, "Category_B": 0.15},
+                "text": text[:100] if text else ""
+            })
+        return results
+    
+    classifier._process_batch = mock_process_batch
+    
+    return classifier
+
+
+@pytest.fixture
+def sample_pdf_path(tmp_path):
+    """Create a temporary PDF file for testing."""
+    pdf_file = tmp_path / "test.pdf"
+    # Create a minimal valid PDF
+    pdf_content = b"""%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 44 >>
+stream
+BT
+/F1 12 Tf
+100 700 Td
+(Test PDF content) Tj
+ET
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000274 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+362
+%%EOF"""
+    pdf_file.write_bytes(pdf_content)
+    return str(pdf_file)
+
+
+@pytest.fixture
+def classifier_with_eager_loading(mocker, disable_lazy_loading):
+    """Classifier fixture with lazy loading disabled for from_pretrained assertion tests.
+    
+    This fixture ensures that AutoTokenizer.from_pretrained and 
+    AutoModelForSequenceClassification.from_pretrained are called immediately
+    during classifier initialization, not deferred.
+    
+    Use this in tests that need to assert:
+        mock_tokenizer.from_pretrained.assert_called_once()
+        mock_model.from_pretrained.assert_called_once()
+    """
+    # Mock components
+    mock_tokenizer = mocker.Mock()
+    mock_encoding = mocker.Mock()
+    mock_encoding.input_ids = torch.tensor([[1, 2, 3]])
+    mock_encoding.attention_mask = torch.tensor([[1, 1, 1]])
+    mock_encoding.to = mocker.Mock(return_value=mock_encoding)
+    mock_tokenizer.return_value = mock_encoding
+    
+    mock_model = mocker.Mock()
+    mock_outputs = mocker.Mock()
+    mock_outputs.logits = torch.tensor([[0.1, 5.0, 0.1]])  # Strong logits → softmax ~0.99 confidence
+    mock_model.return_value = mock_outputs
+    mock_model.to = mocker.Mock(return_value=mock_model)
+    mock_model.eval = mocker.Mock()
+    
+    # Patch the imports - store references for assertion access
+    mock_tokenizer_patch = mocker.patch(
+        "bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
+        return_value=mock_tokenizer
+    )
+    mock_model_patch = mocker.patch(
+        "bu_processor.pipeline.classifier.AutoModelForSequenceClassification.from_pretrained", 
+        return_value=mock_model
+    )
+    mocker.patch("torch.cuda.is_available", return_value=False)
+    mocker.patch("bu_processor.pipeline.classifier.EnhancedPDFExtractor")
+    
+    from bu_processor.pipeline.classifier import RealMLClassifier
+    classifier = RealMLClassifier()
+    
+    # Attach mock references for test assertions
+    classifier._test_mock_tokenizer_patch = mock_tokenizer_patch
+    classifier._test_mock_model_patch = mock_model_patch
+    classifier._test_mock_tokenizer = mock_tokenizer
+    classifier._test_mock_model = mock_model
+    
+    return classifier
+
 
 @pytest.fixture
 def mock_torch_model(mocker):
@@ -137,7 +297,7 @@ def mock_torch_model(mocker):
         # Mock forward pass
         mock_outputs = mocker.Mock()
         logits = torch.zeros(1, num_categories)
-        logits[0, high_confidence_category] = 2.0  # High logit für eine Kategorie
+        logits[0, high_confidence_category] = 5.0  # Strong logit for high confidence (~0.99 after softmax)
         mock_outputs.logits = logits
         mock_model.return_value = mock_outputs
         
@@ -281,6 +441,32 @@ def capture_logs(caplog):
     return caplog
 
 
+# === OCR TESTING UTILITIES ===
+
+def check_tesseract_available():
+    """Prüft, ob Tesseract OCR verfügbar ist."""
+    try:
+        import pytesseract
+        # Einfacher Test ob pytesseract funktioniert
+        pytesseract.get_tesseract_version()
+        return True
+    except (ImportError, Exception):
+        return False
+
+
+# OCR Skip-Decorator für Tests, die echtes OCR benötigen
+requires_tesseract = pytest.mark.skipif(
+    not check_tesseract_available(),
+    reason="Tesseract OCR nicht verfügbar - Test wird übersprungen"
+)
+
+
+@pytest.fixture
+def ocr_available():
+    """Fixture die True zurückgibt wenn OCR verfügbar ist."""
+    return check_tesseract_available()
+
+
 # === PERFORMANCE FIXTURES ===
 
 @pytest.fixture
@@ -411,6 +597,9 @@ def mock_api_responses():
 
 def pytest_configure(config):
     """Pytest-Konfiguration beim Start."""
+    # Set the configured flag
+    os.environ["PYTEST_CONFIGURED"] = "1"
+    
     # Marker registrieren falls nicht in pyproject.toml
     config.addinivalue_line("markers", "unit: Unit tests")
     config.addinivalue_line("markers", "integration: Integration tests")
@@ -602,7 +791,7 @@ class MockMLModel:
                 raise RuntimeError("Model inference failed")
             
             mock_outputs = self.mocker.Mock()
-            mock_outputs.logits = torch.tensor([[0.2, 0.8, 0.0]])
+            mock_outputs.logits = torch.tensor([[0.2, 5.0, 0.0]])  # Strong logits for high confidence
             return mock_outputs
         
         mock_model.side_effect = flaky_forward
@@ -738,3 +927,140 @@ def slow_test(reason: str = "Performance test"):
 def mock_test(reason: str = "Uses comprehensive mocks"):
     """Decorator für Mock-Tests."""
     return pytest.mark.mock
+
+
+# === LAZY LOADING UTILITIES ===
+
+def force_model_loading(classifier):
+    """Utility function to explicitly trigger model loading in a lazy-loaded classifier.
+    
+    Call this in tests when you need to ensure that from_pretrained methods 
+    have been called before making assertions.
+    
+    Args:
+        classifier: RealMLClassifier instance (potentially lazy-loaded)
+        
+    Example:
+        def test_something(classifier_with_mocks, mocker):
+            mock_tokenizer = mocker.patch("...AutoTokenizer.from_pretrained")
+            mock_model = mocker.patch("...AutoModel.from_pretrained") 
+            
+            # Force loading to trigger from_pretrained calls
+            force_model_loading(classifier_with_mocks)
+            
+            # Now assertions will work
+            mock_tokenizer.assert_called_once()
+            mock_model.assert_called_once()
+    """
+    if hasattr(classifier, '_load_model_and_tokenizer'):
+        classifier._load_model_and_tokenizer()
+    else:
+        # Fallback: trigger loading by calling a method that requires the model
+        try:
+            classifier.classify_text("dummy text to trigger loading")
+        except Exception:
+            pass  # Expected if mocked
+
+
+def create_eager_classifier_fixture(mocker):
+    """Factory function to create a classifier with eager loading.
+    
+    Use this in individual tests when you can't use the global fixture.
+    
+    Returns:
+        tuple: (classifier, mock_tokenizer_patch, mock_model_patch)
+        
+    Example:
+        def test_from_pretrained_calls(mocker):
+            classifier, mock_tok, mock_mod = create_eager_classifier_fixture(mocker)
+            mock_tok.assert_called_once()
+            mock_mod.assert_called_once()
+    """
+    # Temporarily disable lazy loading
+    original_lazy = os.environ.get("BU_LAZY_MODELS")
+    os.environ["BU_LAZY_MODELS"] = "0"
+    
+    try:
+        # Mock components
+        mock_tokenizer = mocker.Mock()
+        mock_encoding = mocker.Mock()
+        mock_encoding.input_ids = torch.tensor([[1, 2, 3]])
+        mock_encoding.attention_mask = torch.tensor([[1, 1, 1]])
+        mock_encoding.to = mocker.Mock(return_value=mock_encoding)
+        mock_tokenizer.return_value = mock_encoding
+        
+        mock_model = mocker.Mock()
+        mock_outputs = mocker.Mock()
+        mock_outputs.logits = torch.tensor([[0.1, 5.0, 0.1]])  # Strong logits → softmax ~0.99 confidence
+        mock_model.return_value = mock_outputs
+        mock_model.to = mocker.Mock(return_value=mock_model)
+        mock_model.eval = mocker.Mock()
+        
+        # Patch the imports
+        mock_tokenizer_patch = mocker.patch(
+            "bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
+            return_value=mock_tokenizer
+        )
+        mock_model_patch = mocker.patch(
+            "bu_processor.pipeline.classifier.AutoModelForSequenceClassification.from_pretrained", 
+            return_value=mock_model
+        )
+        mocker.patch("torch.cuda.is_available", return_value=False)
+        mocker.patch("bu_processor.pipeline.classifier.EnhancedPDFExtractor")
+        
+        from bu_processor.pipeline.classifier import RealMLClassifier
+        classifier = RealMLClassifier()
+        
+        return classifier, mock_tokenizer_patch, mock_model_patch
+        
+    finally:
+        # Restore original setting
+        if original_lazy is not None:
+            os.environ["BU_LAZY_MODELS"] = original_lazy
+
+
+# === TRAINING TEST FIXTURES ===
+
+@pytest.fixture
+def dummy_train_val(tmp_path, monkeypatch):
+    """Fixture für Dummy-CSV Dateien für Training-Tests.
+    
+    Erstellt temporäre train.csv und val.csv mit korrekten Labels
+    und setzt die entsprechenden Umgebungsvariablen.
+    
+    Returns:
+        tuple: (train_path, val_path) als Strings
+    """
+    if not PANDAS_AVAILABLE:
+        pytest.skip("pandas not available for training tests")
+    
+    # Erstelle Dummy-Daten mit korrekten Labels aus TrainingConfig
+    train_data = [
+        {"text": "Dies ist ein Antrag für Betriebsunterbrechung", "label": "BU_ANTRAG"},
+        {"text": "Hier ist eine Police für Versicherung", "label": "POLICE"},
+        {"text": "Diese Bedingungen sind wichtig zu beachten", "label": "BEDINGUNGEN"},
+        {"text": "Sonstiger wichtiger Text für Training", "label": "SONSTIGES"},
+        {"text": "Noch ein BU Antrag für bessere Abdeckung", "label": "BU_ANTRAG"},
+        {"text": "Eine weitere Police mit Details", "label": "POLICE"},
+    ]
+    
+    val_data = [
+        {"text": "Validierung für BU Antrag", "label": "BU_ANTRAG"},
+        {"text": "Validierung für Bedingungen", "label": "BEDINGUNGEN"},
+        {"text": "Validierung für sonstiges", "label": "SONSTIGES"},
+    ]
+    
+    # Erstelle temporäre CSV-Dateien
+    train_path = tmp_path / "train.csv"
+    val_path = tmp_path / "val.csv"
+    
+    pd.DataFrame(train_data).to_csv(train_path, index=False)
+    pd.DataFrame(val_data).to_csv(val_path, index=False)
+    
+    # Setze Umgebungsvariablen für die Training-Konfiguration
+    monkeypatch.setenv("TRAIN_PATH", str(train_path))
+    monkeypatch.setenv("VAL_PATH", str(val_path))
+    
+    return str(train_path), str(val_path)
+    return str(train_path), str(val_path)
+    return str(train_path), str(val_path)

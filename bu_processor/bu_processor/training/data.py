@@ -1,9 +1,9 @@
 import pandas as pd
 from datasets import Dataset, DatasetDict
 from typing import Dict
-from .config import TrainConfig
+from .config import TrainingConfig
 
-def load_dataset(cfg: TrainConfig) -> DatasetDict:
+def load_dataset(cfg: TrainingConfig) -> DatasetDict:
     train_df = pd.read_csv(cfg.train_path)
     val_df = pd.read_csv(cfg.val_path)
     data = DatasetDict({
@@ -12,7 +12,7 @@ def load_dataset(cfg: TrainConfig) -> DatasetDict:
     })
     return data
 
-def encode_labels(ds: DatasetDict, cfg: TrainConfig) -> DatasetDict:
+def encode_labels(ds: DatasetDict, cfg: TrainingConfig) -> DatasetDict:
     label2id: Dict[str, int] = {l: i for i, l in enumerate(cfg.label_list)}
     id2label: Dict[int, str] = {i: l for l, i in label2id.items()}
 
@@ -28,7 +28,7 @@ def encode_labels(ds: DatasetDict, cfg: TrainConfig) -> DatasetDict:
 
 from transformers import AutoModelForSequenceClassification
 
-def build_model(cfg: TrainConfig, id2label):
+def build_model(cfg: TrainingConfig, id2label):
     num_labels = len(cfg.label_list)
     model = AutoModelForSequenceClassification.from_pretrained(
         cfg.model_name,

@@ -13,39 +13,85 @@ KEY IMPROVEMENTS:
 - Clean Architecture: Separation of Concerns
 """
 
+from typing import Any, Dict, List, Optional, Tuple, Union, cast, Protocol
+import logging
 import asyncio
 import time
+import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Tuple, Protocol, Any
 from dataclasses import dataclass, field
-from enum import Enum
-from abc import ABC, abstractmethod
-import structlog
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import json
 
-# Pydantic for Configuration Validation
-from pydantic import BaseModel, Field, validator, ValidationError
+# Pydantic imports
+try:
+    from pydantic import BaseModel, Field, validator, ValidationError
+    PYDANTIC_AVAILABLE = True
+except ImportError:
+    BaseModel = object
+    Field = lambda **kwargs: None
+    validator = lambda *args, **kwargs: lambda f: f
+    ValidationError = Exception
+    PYDANTIC_AVAILABLE = False
 
-# Import Pipeline-Komponenten
-from .pdf_extractor import EnhancedPDFExtractor, ExtractedContent, DocumentChunk, ChunkingStrategy
+# ThreadPoolExecutor import
+try:
+    from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+except ImportError:
+    ThreadPoolExecutor = None  # type: ignore
+    ProcessPoolExecutor = None  # type: ignore
+
+from .pdf_extractor import EnhancedPDFExtractor, ChunkingStrategy
 from .classifier import RealMLClassifier
 
-# Import semantic chunking falls verfügbar
+# Try to import optional dependencies
+try:
+    from .pinecone_integration import PineconeManager, AsyncPineconeConfig, AsyncPineconePipeline
+    PINECONE_AVAILABLE = True
+    PINECONE_INTEGRATION_AVAILABLE = True
+except ImportError:
+    PineconeManager = None  # type: ignore
+    AsyncPineconeConfig = None  # type: ignore
+    AsyncPineconePipeline = None  # type: ignore
+    PINECONE_AVAILABLE = False
+    PINECONE_INTEGRATION_AVAILABLE = False
+
+# Try to import semantic enhancement
 try:
     from .semantic_chunking_enhancement import SemanticClusteringEnhancer
     SEMANTIC_ENHANCEMENT_AVAILABLE = True
 except ImportError:
+    SemanticClusteringEnhancer = None  # type: ignore
     SEMANTIC_ENHANCEMENT_AVAILABLE = False
 
-# Import Pinecone integration falls verfügbar
 try:
-    from .pinecone_integration import PineconePipeline, PineconeConfig, EmbeddingModel, PineconeEnvironment
-    PINECONE_INTEGRATION_AVAILABLE = True
+    from .chatbot_integration import ChatbotIntegration
+    CHATBOT_INTEGRATION_AVAILABLE = True
 except ImportError:
-    PINECONE_INTEGRATION_AVAILABLE = False
+    ChatbotIntegration = None  # type: ignore
+    CHATBOT_INTEGRATION_AVAILABLE = False
 
-logger = structlog.get_logger("pipeline.enhanced_integrated_pipeline_refactored")
+# Try to import other types
+try:
+    from .pdf_extractor import ExtractedContent, DocumentChunk
+except ImportError:
+    ExtractedContent = None  # type: ignore
+    DocumentChunk = None  # type: ignore
+
+# ThreadPoolExecutor import
+try:
+    from concurrent.futures import ThreadPoolExecutor
+except ImportError:
+    ThreadPoolExecutor = None  # type: ignore
+
+from ..core.config import BUProcessorConfig, config
+
+# Try to import structlog, fallback to standard logging
+try:
+    import structlog
+    logger = structlog.get_logger("pipeline.enhanced_integrated_pipeline_refactored")
+except ImportError:
+    logger = logging.getLogger("pipeline.enhanced_integrated_pipeline_refactored")
 
 # ============================================================================
 # PYDANTIC CONFIGURATION MODELS
@@ -283,8 +329,8 @@ class PipelineResult:
     upload_success: bool = False
     
     # Extracted Data
-    extracted_content: Optional[ExtractedContent] = None
-    chunks: List[DocumentChunk] = field(default_factory=list)
+    extracted_content: Optional[Any] = None  # ExtractedContent when available
+    chunks: List[Any] = field(default_factory=list)  # DocumentChunk list when available
     final_classification: Optional[Dict] = None
     
     # Analysis Results
@@ -304,6 +350,11 @@ class PipelineResult:
     def is_successful(self) -> bool:
         """Prüft ob Pipeline erfolgreich war"""
         return len(self.errors) == 0 and self.extraction_success
+
+    # Convenience alias to match externally expected attribute naming
+    @property
+    def success(self) -> bool:  # pragma: no cover - simple delegation
+        return self.is_successful()
     
     def get_summary(self) -> Dict:
         """Zusammenfassung der wichtigsten Ergebnisse"""
@@ -343,7 +394,8 @@ class EnhancedIntegratedPipeline:
         self,
         model_path: Optional[str] = None,
         pinecone_config: Optional[Dict[str, Any]] = None,
-        default_strategy: str = "balanced"
+        default_strategy: str = "balanced",
+        config: Optional[Dict[str, Any]] = None
     ) -> None:
         """Initialisiert die Enhanced Integrated Pipeline.
         
@@ -351,8 +403,17 @@ class EnhancedIntegratedPipeline:
             model_path: Optionaler Pfad zum ML-Model
             pinecone_config: Optionale Pinecone-Konfiguration
             default_strategy: Standard-Verarbeitungsstrategie
+            config: Zusätzliche Konfiguration (für Tests)
         """
+        # Store config for tests
+        self.config = config or {}
+        
         self.default_strategy = default_strategy
+        # Speichere eine serialisierte Default-Konfiguration (wird für Wrapper verwendet)
+        try:
+            self.default_config = StrategyFactory.create_strategy(default_strategy).get_config().dict()
+        except Exception:
+            self.default_config = {}
         
         # Initialize Components
         self._initialize_components(model_path, pinecone_config)
@@ -394,11 +455,11 @@ class EnhancedIntegratedPipeline:
         if PINECONE_INTEGRATION_AVAILABLE:
             try:
                 if pinecone_config:
-                    pinecone_config_obj = PineconeConfig(**pinecone_config)
+                    pinecone_config_obj = AsyncPineconeConfig(**pinecone_config) if AsyncPineconeConfig else None
                 else:
-                    pinecone_config_obj = PineconeConfig()
+                    pinecone_config_obj = AsyncPineconeConfig() if AsyncPineconeConfig else None
                 
-                self.pinecone_pipeline = PineconePipeline(pinecone_config_obj)
+                self.pinecone_pipeline = AsyncPineconePipeline(pinecone_config_obj) if AsyncPineconePipeline and pinecone_config_obj else None
                 logger.info("Pinecone Pipeline initialisiert")
             except Exception as e:
                 logger.warning(f"Pinecone Pipeline Initialisierung fehlgeschlagen: {e}")
@@ -1102,12 +1163,19 @@ class EnhancedIntegratedPipeline:
             config_dict.update(custom_config.additional_metadata)
         
         # Behandle extra fields aus CustomConfig.Config.extra = "allow"
-        extra_fields = {k: v for k, v in custom_config.dict().items() 
-                       if k not in ['pdf_extraction_method', 'embedding_model', 'namespace_override', 'additional_metadata']}
+        extra_fields = {k: v for k, v in custom_config.dict().items()
+                        if k not in ['pdf_extraction_method', 'embedding_model', 'namespace_override', 'additional_metadata']}
         if extra_fields:
-            if 'custom_overrides' not in config_dict:
-                config_dict['custom_overrides'] = {}
-            config_dict['custom_overrides'].update(extra_fields)
+            # Falls ein Extra-Feld ein echtes PipelineConfig Feld ist, direkt anwenden
+            pipeline_fields = set(PipelineConfig.__fields__.keys())
+            for k, v in list(extra_fields.items()):
+                if k in pipeline_fields:
+                    config_dict[k] = v
+                    extra_fields.pop(k, None)
+            if extra_fields:
+                if 'custom_overrides' not in config_dict:
+                    config_dict['custom_overrides'] = {}
+                config_dict['custom_overrides'].update(extra_fields)
         
         # Create new config instance
         try:
@@ -1131,6 +1199,71 @@ class EnhancedIntegratedPipeline:
         """
         if hasattr(self, 'executor'):
             self.executor.shutdown(wait=True)
+
+    # ====================================================================
+    # NEUE WRAPPER-METHODEN (vereinfachte API)
+    # ====================================================================
+    from pathlib import Path as _PathAlias  # lokale Aliase vermeiden Namenskollisionen
+    from typing import Dict as _DictAlias, Any as _AnyAlias, List as _ListAlias, Union as _UnionAlias
+
+    def process_pdf(self, file_path: Union[str, Path]) -> "PipelineResult":
+        """Einfacher Wrapper für process_document (Rückwärtskompatibilität)."""
+        return self.process_document(file_path)
+
+    def process_pdf_batch(self, file_paths: List[Union[str, Path]]) -> "BatchPipelineResult":
+        """Verarbeite mehrere PDFs nacheinander (synchroner Batch Wrapper)."""
+        results: List[PipelineResult] = []
+        successful = 0
+        for p in file_paths:
+            r = self.process_document(p)
+            if r.success:
+                successful += 1
+            results.append(r)
+        return BatchPipelineResult(total_processed=len(file_paths), successful=successful, results=results)
+
+    def process_pdf_with_similarity_search(self, file_path: Union[str, Path]) -> "PipelineResult":
+        """Wrapper der Similarity Search aktiviert ohne Strategie explizit zu wechseln."""
+        custom = dict(self.default_config) if hasattr(self, 'default_config') else {}
+        custom["find_similar_documents"] = True
+        # Diese Einstellung wird via _merge_custom_config auf PipelineConfig gespiegelt
+        return self.process_document(file_path, custom_config=custom)
+
+    def get_health_status(self) -> Dict[str, Any]:
+        """Health-Status der Pipeline und Kernkomponenten.
+
+        Gibt einen aggregierten Überblick über initialisierte Komponenten und
+        den Status des Classifiers (falls verfügbar) zurück.
+        """
+        status: Dict[str, Any] = {"pipeline_status": "healthy"}
+        components = [getattr(self, "pdf_extractor", None), getattr(self, "classifier", None),
+                      getattr(self, "semantic_enhancer", None), getattr(self, "pinecone_pipeline", None)]
+        status["components_initialized"] = sum(1 for c in components if c is not None)
+
+        cls = getattr(self, "classifier", None)
+        if cls and hasattr(cls, "get_health_status"):
+            try:
+                status["classifier_status"] = cls.get_health_status()
+            except Exception as e:  # pragma: no cover - defensive
+                status["classifier_status"] = {"status": f"error: {e}"}
+                status["pipeline_status"] = "degraded"
+        else:
+            status["classifier_status"] = {"status": "unavailable"}
+            status["pipeline_status"] = "degraded"
+        return status
+
+
+# =========================================================================
+# BATCH RESULT DATACLASS (für Wrapper process_pdf_batch)
+# =========================================================================
+
+@dataclass
+class BatchPipelineResult:
+    total_processed: int
+    successful: int
+    results: List[PipelineResult]
+
+    def success_rate(self) -> float:
+        return (self.successful / self.total_processed) if self.total_processed else 0.0
 
 
 # ============================================================================
@@ -1197,14 +1330,52 @@ def process_documents_multiprocessing(
         (p, strategy, custom_config, default_strategy) for p in normalized
     ]
 
+    # Windows-Schutz: ohne __main__-Guard fallback auf Threads (Test-Kontext)
+    if sys.platform.startswith("win") and __name__ != "__main__":
+        executor_cls = ThreadPoolExecutor
+    else:
+        executor_cls = ProcessPoolExecutor
+
     results_map: Dict[str, Dict[str, Any]] = {}
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        for file_path, summary in executor.map(_mp_worker_process_document, tasks):
-            # Falls Datei nicht existiert, Fehler anreichern
-            if not Path(file_path).exists():
-                summary.setdefault("errors", []).append("Datei nicht gefunden (pre-check): " + file_path)
-                summary["success"] = False
-            results_map[file_path] = summary
+    
+    # Initialisiere alle Pfade mit Fehler-Fallback (verhindert KeyError)
+    for file_path in normalized:
+        results_map[file_path] = {
+            "success": False,
+            "errors": ["Processing not completed"],
+            "processing_time": 0.0,
+            "chunks_created": 0,
+            "classification": None,
+            "confidence": None,
+            "pinecone_uploads": 0,
+            "similar_docs_found": 0,
+            "errors_count": 1,
+            "warnings_count": 0
+        }
+    
+    try:
+        with executor_cls(max_workers=max_workers) as executor:
+            for file_path, summary in executor.map(_mp_worker_process_document, tasks):
+                # Überschreibe Fallback-Ergebnis mit echtem Ergebnis
+                if not Path(file_path).exists():
+                    summary.setdefault("errors", []).append("Datei nicht gefunden (pre-check): " + file_path)
+                    summary["success"] = False
+                results_map[file_path] = summary
+    except Exception as e:
+        # Falls Executor komplett fehlschlägt, Fehler für alle Dateien setzen
+        for file_path in normalized:
+            results_map[file_path] = {
+                "success": False,
+                "errors": [f"Executor failed: {e}"],
+                "processing_time": 0.0,
+                "chunks_created": 0,
+                "classification": None,
+                "confidence": None,
+                "pinecone_uploads": 0,
+                "similar_docs_found": 0,
+                "errors_count": 1,
+                "warnings_count": 0
+            }
 
     # Reihenfolge wie Input
     return [results_map[p] for p in normalized]
@@ -1304,5 +1475,29 @@ if __name__ == "__main__":
         asyncio.run(demo_refactored_pipeline())
     except KeyboardInterrupt:
         demo_logger.info("Demo interrupted by user")
+    except Exception as e:
+        demo_logger.error("Demo execution failed", error=str(e), exc_info=True)
+    except Exception as e:
+        demo_logger.error("Demo execution failed", error=str(e), exc_info=True)
+        demo_logger.error("Demo fehlgeschlagen", error=str(e), exc_info=True)
+
+# ============================================================================
+# DEMO RUNNER
+# ============================================================================
+
+if __name__ == "__main__":
+    # Only run demo if explicitly executed as main module
+    # This prevents demo from running during imports
+    import sys
+    
+    demo_logger = logger
+    demo_logger.info("Starting pipeline demo from main")
+    
+    try:
+        asyncio.run(demo_refactored_pipeline())
+    except KeyboardInterrupt:
+        demo_logger.info("Demo interrupted by user")
+    except Exception as e:
+        demo_logger.error("Demo execution failed", error=str(e), exc_info=True)
     except Exception as e:
         demo_logger.error("Demo execution failed", error=str(e), exc_info=True)

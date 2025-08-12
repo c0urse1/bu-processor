@@ -339,7 +339,9 @@ async def health_check():
         features_enabled = {"basic_classification": True}
     
     return HealthResponse(
-        status="healthy" if classifier_loaded and classifier_status == "healthy" else "degraded",
+        status="healthy" if classifier_loaded and classifier_status == "healthy" else 
+               "degraded" if classifier_loaded and classifier_status == "degraded" else 
+               "degraded",
         version=getattr(config, 'version', '1.0.0'),
         environment=getattr(config.environment, 'value', 'unknown'),
         classifier_loaded=classifier_loaded,

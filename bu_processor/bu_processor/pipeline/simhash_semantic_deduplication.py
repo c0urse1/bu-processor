@@ -14,10 +14,15 @@ NEUE FEATURES:
 - Performance-optimierte Cluster-Bildung
 """
 
+from __future__ import annotations  # postpone annotation eval
+
 import mmh3
 import numpy as np
 from typing import Dict, List, Set, Tuple, Optional, Iterable
 from collections import defaultdict, Counter
+
+# Import required types
+from .content_types import ContentType  # REQUIRED: brings ContentType into scope
 import re
 from dataclasses import dataclass
 import hashlib
@@ -65,42 +70,93 @@ class SimHashResult:
 
 
 class SemanticSimHashGenerator:
-    """Erweiterte SimHash-Implementierung mit intelligenter Term-Gewichtung."""
+    """Generate SimHash with semantic understanding."""
     
-    def __init__(self, bit_size: Optional[int] = None, ngram_size: Optional[int] = None):
-        self.config = DEDUPLICATION_CONFIG
-        self.bit_size = bit_size or self.config['simhash_bit_size']
-        self.ngram_size = ngram_size or self.config['simhash_ngram_size']
+    def __init__(self, embedding_model: Optional[str] = None, ngram_size: int = 3, bit_size: int = 64):
+        self.embedding_model = embedding_model
+        self.ngram_size = ngram_size
+        self.bit_size = bit_size
+        self.encoder = None
+        self.stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should'}
+        self.config = {
+            'min_token_length': 3,
+            'min_important_word_length': 6,
+            'enable_semantic_features': True,
+            'cache_size_limit': 10000,
+            'similarity_threshold': 0.85,
+            'hamming_threshold': 3,
+            'content_type_weights': {
+                'text': 1.0,
+                'heading': 1.5,
+                'title': 2.0,
+                'footer': 0.5,
+                'header': 0.7
+            },
+            'selection_weights': {
+                'similarity': 0.7,
+                'position': 0.2,
+                'length': 0.1
+            }
+        }  # Add config attribute
         
-        ### VERBESSERUNG 1: Erweiterte Pattern und Fachbegriffe ###
+        # Add text patterns for semantic analysis
+        import re
         self.text_patterns = {
-            'legal_terms': re.compile(r'\b(versicherung|vertrag|haftung|anspruch|leistung|police|klausel|rente|bu|berufsunfähigkeit|arbeitskraft|erwerbsminderung|invalidität)\w*\b', re.IGNORECASE),
-            'insurance_benefits': re.compile(r'\b(monatliche?\s*rente|einmalzahlung|progression|gliedertaxe|unfallrente|dynamik)\w*\b', re.IGNORECASE),
-            'exclusions': re.compile(r'\b(ausschluss|ausgeschlossen|nicht\s*versichert|ausnahme|beschränkung)\w*\b', re.IGNORECASE),
-            'medical_terms': re.compile(r'\b(krankheit|unfall|verletzung|diagnose|behandlung|therapie|rehabilitation|ärztlich)\w*\b', re.IGNORECASE),
-            'numbers': re.compile(r'\b\d+(?:[.,]\d+)*\b'),
-            'currency': re.compile(r'\b\d+(?:[.,]\d+)*\s*(?:€|EUR|euro)\b', re.IGNORECASE),
-            'percentages': re.compile(r'\b\d+(?:[.,]\d+)*\s*%\b'),
-            'time_periods': re.compile(r'\b(\d+\s*(?:jahre?|monate?|wochen?|tage?)|monatlich|jährlich|lebenslang)\b', re.IGNORECASE)
+            'legal_terms': re.compile(r'\b(rechtsschutz|versicherung|klausel|bedingung|haftung)\b', re.IGNORECASE),
+            'insurance_benefits': re.compile(r'\b(leistung|erstattung|zahlung|deckung|schutz)\b', re.IGNORECASE),
+            'medical_terms': re.compile(r'\b(arzt|behandlung|krankenhaus|medizin|therapie)\b', re.IGNORECASE),
+            'exclusions': re.compile(r'\b(ausschluss|nicht|kein|ohne|ausgenommen)\b', re.IGNORECASE),
+            'numbers': re.compile(r'\d+'),
+            'currency': re.compile(r'[€$£¥]\s*\d+|\d+\s*[€$£¥]'),
+            'percentages': re.compile(r'\d+\s*%')
         }
         
-        # Erweiterte Stoppwörter für Versicherungsdomäne
-        self.stopwords = {
-            'der', 'die', 'das', 'und', 'oder', 'aber', 'mit', 'von', 'bei', 'zu', 'im', 'am', 'ist', 'sind', 
-            'haben', 'wird', 'werden', 'kann', 'soll', 'ein', 'eine', 'einer', 'eines', 'sich', 'als', 'für', 
-            'auf', 'nach', 'über', 'unter', 'zwischen', 'durch', 'gegen', 'ohne', 'bis', 'seit', 'während',
-            'beispielsweise', 'insbesondere', 'soweit', 'sofern', 'falls', 'jedoch', 'dennoch', 'außerdem'
-        }
+        if embedding_model:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self.encoder = SentenceTransformer(embedding_model)
+            except ImportError:
+                pass
+    
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for processing."""
+        return text.lower().strip()
+    
+    def _extract_features(self, text: str, ngram_size: int) -> List[str]:
+        """Extract n-gram features from text."""
+        words = text.split()
+        if len(words) < ngram_size:
+            return [text] if text else ["empty"]
         
-        # Wichtige Fachbegriffs-Kombinationen
-        self.important_bigrams = [
-            r'abstrakte?\s+verweisung', r'konkrete?\s+verweisung', r'versicherungs?\s*nehmer',
-            r'versicherungs?\s*fall', r'leistungs?\s*fall', r'beitrag\w*\s+befreiung',
-            r'nachversicherungs?\s*garantie', r'wartezeit\w*', r'rück\s*wirkung'
-        ]
-
-        self._cache = {} if self.config['enable_caching'] else None
-        self._cache_size_limit = self.config['cache_size_limit']
+        features = []
+        for i in range(len(words) - ngram_size + 1):
+            features.append(' '.join(words[i:i + ngram_size]))
+        return features if features else [text]
+    
+    def generate(self, text: str) -> int:
+        """Generate SimHash for text."""
+        if not text:
+            return 0
+        
+        normalized = self._normalize_text(text)
+        features = self._extract_features(normalized, self.ngram_size)
+        
+        # Generate hash
+        v = [0] * 64
+        for feature in features:
+            h = hash(feature)
+            for i in range(64):
+                if h & (1 << i):
+                    v[i] += 1
+                else:
+                    v[i] -= 1
+        
+        simhash = 0
+        for i in range(64):
+            if v[i] >= 0:
+                simhash |= 1 << i
+        
+        return simhash
 
     def generate_simhash_for_corpus(self, chunks: List[HierarchicalChunk]) -> Dict[str, SimHashResult]:
         """Generiert SimHashes für eine ganze Liste von Chunks mit Corpus-Analyse."""
@@ -277,6 +333,73 @@ class SemanticSimHashGenerator:
         normalized = re.sub(r'\s+', ' ', normalized)
         return normalized
 
+    def _extract_features(self, text: str, n: int) -> List[Tuple[str, float]]:
+        """Extrahiert Features (n-grams) mit Gewichten für SimHash-Berechnung.
+        
+        Args:
+            text: Normalisierter Text 
+            n: N-Gram Größe
+            
+        Returns:
+            Liste von (feature, weight) Tupeln
+        """
+        # Tokenize the text
+        tokens = [token for token in text.split() if token not in self.stopwords and len(token) >= self.config['min_token_length']]
+        
+        if len(tokens) < n:
+            # For very short texts, return individual tokens with weight 1.0
+            return [(token, 1.0) for token in tokens] if tokens else [(text[:20], 1.0)]
+
+        features = []
+        
+        # Generate n-grams
+        for i in range(len(tokens) - n + 1):
+            ngram = " ".join(tokens[i:i+n])
+            # Calculate basic weight (can be enhanced later)
+            weight = self._calculate_basic_feature_weight(ngram)
+            features.append((ngram, weight))
+        
+        # Add important single tokens
+        for token in tokens:
+            if self._is_important_single_token(token):
+                weight = self._calculate_basic_feature_weight(token)
+                features.append((token, weight))
+        
+        return features
+
+    def _calculate_basic_feature_weight(self, feature: str) -> float:
+        """Berechnet ein Grundgewicht für ein Feature basierend auf Mustern.
+        
+        Args:
+            feature: Das zu bewertende Feature (Token oder N-Gram)
+            
+        Returns:
+            Gewichtsfaktor (standardmäßig 1.0, höher für wichtige Begriffe)
+        """
+        weight = 1.0
+        feature_lower = feature.lower()
+        
+        # Pattern-basierte Gewichtung
+        for pattern_name, pattern in self.text_patterns.items():
+            if pattern.search(feature):
+                if pattern_name == 'legal_terms':
+                    weight *= 2.0
+                elif pattern_name == 'insurance_benefits':
+                    weight *= 1.8
+                elif pattern_name in ['medical_terms', 'exclusions']:
+                    weight *= 1.6
+                else:
+                    weight *= 1.3
+        
+        # Längenbonus für spezifische Begriffe
+        tokens = feature.split()
+        if tokens:
+            avg_len = sum(len(t) for t in tokens) / len(tokens)
+            if avg_len > self.config['min_important_word_length']:
+                weight *= (1.0 + avg_len * 0.05)
+        
+        return weight
+
     def _is_important_single_token(self, token: str) -> bool:
         if len(token) < self.config['min_token_length']: 
             return False
@@ -324,45 +447,6 @@ class SemanticSimHashGenerator:
             features.get('legal_terms_density', 0) * 0.4 +
             features.get('insurance_benefits_density', 0) * 0.3
         )
-        
-        return features
-    
-    def _extract_features(self, text: str, ngram_size: int) -> List[Tuple[str, int]]:
-        """Extrahiert Features aus Text für SimHash-Berechnung.
-        
-        Args:
-            text: Zu analysierender Text
-            ngram_size: Größe der N-Gramme
-            
-        Returns:
-            Liste von (feature, weight) Tupeln
-        """
-        # Normalisiere den Text
-        normalized_text = self._normalize_text(text)
-        tokens = normalized_text.split()
-        
-        # Entferne Stoppwörter
-        tokens = [t for t in tokens if t not in self.stopwords and len(t) >= self.config['min_token_length']]
-        
-        features = []
-        
-        # N-Gramme erstellen falls möglich
-        if len(tokens) >= ngram_size:
-            for i in range(len(tokens) - ngram_size + 1):
-                gram = ' '.join(tokens[i:i+ngram_size])
-                features.append((gram, 1))
-        
-        # Einzelne Tokens als Features hinzufügen
-        for token in tokens:
-            # Gewichtung basierend auf Wichtigkeit
-            weight = 1
-            if self._is_important_single_token(token):
-                weight = 2
-            features.append((token, weight))
-        
-        # Falls keine Features gefunden wurden, nutze den ursprünglichen Text
-        if not features:
-            features.append((normalized_text[:20], 1))
         
         return features
 
@@ -687,13 +771,13 @@ def calculate_simhash(text: str, *, bit_size: Optional[int] = None, ngram_size: 
     SemanticSimHashGenerator internals. Only the integer hash value is
     returned (legacy behaviour).
     """
-    generator = SemanticSimHashGenerator(bit_size=bit_size, ngram_size=ngram_size)
+    generator = SemanticSimHashGenerator(ngram_size=ngram_size or 3, bit_size=bit_size or 64)
     # We re-use private normalization/tokenization for consistency.
-    tokens = generator._extract_features(generator._normalize_text(text), generator.ngram_size)  # type: ignore[attr-defined]
+    features = generator._extract_features(generator._normalize_text(text), generator.ngram_size)
     # Basic SimHash logic (duplicated minimal subset to avoid building HierarchicalChunk).
     bit_accumulator = [0] * generator.bit_size
-    for token, weight in tokens:
-        token_hash = mmh3.hash(token, 42, signed=False) & ((1 << generator.bit_size) - 1)
+    for feature, weight in features:
+        token_hash = mmh3.hash(feature.encode('utf-8'), 42, signed=False) & ((1 << generator.bit_size) - 1)
         for i in range(generator.bit_size):
             bit = 1 if (token_hash >> i) & 1 else 0
             bit_accumulator[i] += weight if bit else -weight
@@ -719,6 +803,15 @@ def find_duplicates(documents: Iterable[Dict[str, str]], threshold: int = 8) -> 
         return (a ^ b).bit_count()
     clusters: Dict[str, Set[str]] = {}
     ids = list(hashes.keys())
+    for i, id_a in enumerate(ids):
+        for id_b in ids[i+1:]:
+            if hamming(hashes[id_a], hashes[id_b]) <= threshold:
+                # choose stable representative (first seen)
+                rep = id_a
+                clusters.setdefault(rep, set()).add(id_b)
+    return clusters
+
+# NOTE: Former demo_enhanced_semantic_simhash() removed to slim production module.
     for i, id_a in enumerate(ids):
         for id_b in ids[i+1:]:
             if hamming(hashes[id_a], hashes[id_b]) <= threshold:

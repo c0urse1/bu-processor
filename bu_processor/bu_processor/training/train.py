@@ -1,11 +1,11 @@
 import os
 from transformers import TrainingArguments, Trainer
-from .config import TrainConfig
+from .config import TrainingConfig
 from .data import load_dataset, encode_labels
 from .models import build_tokenizer, tokenize_function, build_collator, build_model
 from .metrics import compute_metrics
 
-def train(cfg: TrainConfig):
+def train(cfg: TrainingConfig):
     os.makedirs(cfg.output_dir, exist_ok=True)
 
     ds = load_dataset(cfg)

@@ -16,12 +16,19 @@ import PyPDF2
 
 # NEU: Import für OCR-Funktionalität
 try:
-    import pytesseract
+    import pytesseract as _pytesseract
     from PIL import Image
     import io
     OCR_AVAILABLE = True
+    ocr = _pytesseract
 except ImportError:
     OCR_AVAILABLE = False
+    import types
+    ocr = types.SimpleNamespace()
+    # Dummy-API, damit Tests ocr.image_to_string patchen können
+    def _dummy_ocr(*args, **kwargs): 
+        return ""
+    ocr.image_to_string = _dummy_ocr
 
 # NEU: Import für Satz-basiertes Chunking (nltk als optionale, robustere Alternative)
 try:
@@ -100,6 +107,10 @@ class PDFPasswordProtectedError(PDFExtractionError):
 
 class PDFTextExtractionError(PDFExtractionError):
     """Raised when text extraction fails"""
+    pass
+
+class NoExtractableTextError(PDFExtractionError):
+    """Raised when no extractable text is found in PDF"""
     pass
 
 @dataclass
@@ -381,12 +392,9 @@ class EnhancedPDFExtractor:
         elif not health_info.get("has_text_content"):
             logger.warning("PDF may not contain extractable text", file=str(pdf_path))
         
-        logger.info("PDF-Extraktion gestartet", 
-                   file=str(pdf_path), 
-                   method=self.prefer_method,
-                   chunking=chunking_strategy.value,
-                   pages=health_info.get("page_count", "unknown"),
-                   size_mb=health_info.get("file_size_mb", "unknown"))
+        logger.info(f"PDF-Extraktion gestartet - File: {pdf_path}, Method: {self.prefer_method}, "
+                   f"Chunking: {chunking_strategy.value}, Pages: {health_info.get('page_count', 'unknown')}, "
+                   f"Size: {health_info.get('file_size_mb', 'unknown')} MB")
         
         # Grundlegende PDF-Extraktion mit Performance-Tracking
         try:
@@ -455,9 +463,8 @@ class EnhancedPDFExtractor:
                 and self.semantic_enhancer):
                 enhanced_content = self._apply_semantic_enhancement(enhanced_content)
             
-            logger.info("PDF-Extraktion mit Chunking abgeschlossen",
-                       chunks_created=len(chunks),
-                       chunking_method=chunking_strategy.value)
+            logger.info(f"PDF-Extraktion mit Chunking abgeschlossen - {len(chunks)} chunks created, "
+                       f"Method: {chunking_strategy.value}")
             
             return enhanced_content
         else:
@@ -485,7 +492,7 @@ class EnhancedPDFExtractor:
         for method in self.supported_methods:
             if method != self.prefer_method:
                 try:
-                    logger.info("Fallback-Versuch", method=method)
+                    logger.info(f"Fallback-Versuch - Method: {method}")
                     if method == "pymupdf":
                         content = self._extract_with_pymupdf(pdf_path)
                         if self.text_cleaner.validate_extracted_text(content.text):
@@ -500,7 +507,7 @@ class EnhancedPDFExtractor:
         
         # Finaler Fallback: OCR, wenn kein Text gefunden wurde
         if not health_info.get("has_text_content") and OCR_AVAILABLE:
-            logger.info("Kein Text im PDF gefunden. Versuche OCR-Extraktion.", file=str(pdf_path))
+            logger.info(f"Kein Text im PDF gefunden. Versuche OCR-Extraktion. File: {pdf_path}")
             try:
                 return self._extract_with_ocr(pdf_path)
             except Exception as ocr_error:
@@ -586,7 +593,7 @@ class EnhancedPDFExtractor:
                 chunk_type="sentence_group"
             ))
 
-        logger.info(f"Sentence-based chunking completed", chunks_created=len(chunks))
+        logger.info(f"Sentence-based chunking completed - {len(chunks)} chunks created")
         return chunks
     
     def _semantic_chunking(self, text: str, max_chunk_size: int) -> List[DocumentChunk]:
@@ -619,7 +626,7 @@ class EnhancedPDFExtractor:
         if not self.semantic_enhancer:
             return chunks
         
-        logger.info("Applying semantic refinement to chunks", chunk_count=len(chunks))
+        logger.info(f"Applying semantic refinement to chunks - {len(chunks)} chunks")
         
         # Placeholder für semantische Verfeinerung
         for chunk in chunks:
@@ -635,7 +642,7 @@ class EnhancedPDFExtractor:
     def _extract_with_ocr(self, pdf_path: Path) -> ExtractedContent:
         """Extrahiert Text aus einem PDF via OCR als Fallback."""
         if not OCR_AVAILABLE:
-            raise PDFTextExtractionError("OCR-Bibliotheken (pytesseract, Pillow) sind nicht installiert.")
+            raise PDFTextExtractionError("OCR-Bibliotheken (ocr, Pillow) sind nicht installiert.")
         
         text_parts = []
         page_count = 0
@@ -649,10 +656,15 @@ class EnhancedPDFExtractor:
                     img = Image.open(io.BytesIO(img_bytes))
                     
                     # OCR auf das Bild anwenden
-                    page_text = pytesseract.image_to_string(img, lang='deu')  # 'deu' für Deutsch
+                    page_text = ocr.image_to_string(img, lang='deu')  # 'deu' für Deutsch
                     text_parts.append(page_text)
 
             full_text = "\n\n".join(text_parts)
+            
+            # Einheitliche Fehlermeldung wenn kein Text extrahierbar ist
+            if not full_text or not full_text.strip():
+                raise NoExtractableTextError("No extractable text found in PDF")
+            
             return ExtractedContent(
                 text=full_text.strip(),
                 page_count=page_count,
@@ -669,7 +681,7 @@ class EnhancedPDFExtractor:
             return content
         
         try:
-            logger.info("Applying semantic enhancement to chunks", chunk_count=len(content.chunks))
+            logger.info(f"Applying semantic enhancement to chunks - {len(content.chunks)} chunks")
             
             # Hier würde die vollständige Integration mit semantic_chunking_enhancement erfolgen
             # enhanced_chunks = self.semantic_enhancer.enhance_chunks_with_semantic_clustering(...)
@@ -723,52 +735,16 @@ class EnhancedPDFExtractor:
     
     def _extract_with_pymupdf(self, pdf_path: Path) -> ExtractedContent:
         """Text-Extraktion mit PyMuPDF (empfohlen) mit paralleler Verarbeitung"""
+        doc = None
         try:
-            with fitz.open(str(pdf_path)) as doc:
-                page_count = len(doc)
-                
-                # Check für zu viele Seiten
-                if page_count > MAX_PDF_PAGES:
-                    logger.warning("PDF has many pages, extraction may be slow", 
-                                 pages=page_count, max_allowed=MAX_PDF_PAGES)
-                
-                # Password check
-                if doc.needs_pass:
-                    raise PDFPasswordProtectedError(f"PDF requires password: {pdf_path}")
-                
-                # Metadata extrahieren falls konfiguriert
-                metadata = {}
-                if EXTRACT_PDF_METADATA:
-                    try:
-                        metadata = dict(doc.metadata) if doc.metadata else {}
-                        metadata['fitz_page_count'] = page_count
-                        metadata['fitz_is_pdf'] = doc.is_pdf
-                    except Exception as e:
-                        logger.warning(f"Failed to extract metadata: {e}")
-                
-                # NEU: Adaptive Entscheidung für Parallelisierung
-                if self._should_parallelize(doc):
-                    text = self._extract_pages_parallel(doc, page_count)
-                else:
-                    text = self._extract_pages_sequential(doc, page_count)
-                
-                if not text or len(text.strip()) < MIN_EXTRACTED_TEXT_LENGTH:
-                    raise PDFTextExtractionError(f"No meaningful text extracted from PDF: {pdf_path}")
-                
-                logger.info("PyMuPDF Extraktion erfolgreich", 
-                           pages=page_count, 
-                           text_length=len(text),
-                           file=str(pdf_path),
-                           extraction_mode="parallel" if page_count > 10 else "sequential")
-                
-                return ExtractedContent(
-                    text=text.strip(),
-                    page_count=page_count,
-                    file_path=str(pdf_path),
-                    metadata=metadata,
-                    extraction_method="pymupdf"
-                )
-                
+            # Bevorzugt Context-Manager
+            try:
+                with fitz.open(str(pdf_path)) as d:
+                    return self._extract_text_from_fitz_doc(d, pdf_path)
+            except TypeError:
+                # Fallback für gemockte Objekte ohne __enter__/__exit__
+                doc = fitz.open(str(pdf_path))
+                return self._extract_text_from_fitz_doc(doc, pdf_path)
         except fitz.FileNotFoundError:
             raise FileNotFoundError(f"PyMuPDF cannot find file: {pdf_path}")
         except fitz.FileDataError as e:
@@ -778,6 +754,60 @@ class EnhancedPDFExtractor:
         except Exception as e:
             logger.error(f"PyMuPDF extraction failed for {pdf_path}: {e}", exc_info=True)
             raise PDFTextExtractionError(f"PyMuPDF extraction failed: {e}") from e
+        finally:
+            try:
+                if doc is not None:
+                    doc.close()
+            except Exception:
+                pass
+    
+    def _extract_text_from_fitz_doc(self, doc, pdf_path: Path) -> ExtractedContent:
+        """Extrahiert Text aus einem geöffneten fitz-Dokument"""
+        page_count = len(doc)
+        
+        # Check für zu viele Seiten
+        if page_count > MAX_PDF_PAGES:
+            logger.warning("PDF has many pages, extraction may be slow", 
+                         pages=page_count, max_allowed=MAX_PDF_PAGES)
+        
+        # Password check
+        if doc.needs_pass:
+            raise PDFPasswordProtectedError(f"PDF requires password: {pdf_path}")
+        
+        # Metadata extrahieren falls konfiguriert
+        metadata = {}
+        if EXTRACT_PDF_METADATA:
+            try:
+                metadata = dict(doc.metadata) if doc.metadata else {}
+                metadata['fitz_page_count'] = page_count
+                metadata['fitz_is_pdf'] = doc.is_pdf
+            except Exception as e:
+                logger.warning(f"Failed to extract metadata: {e}")
+        
+        # NEU: Adaptive Entscheidung für Parallelisierung
+        if self._should_parallelize(doc):
+            text = self._extract_pages_parallel(doc, page_count)
+        else:
+            text = self._extract_pages_sequential(doc, page_count)
+        
+        # Einheitliche Fehlermeldung wenn kein Text extrahierbar ist
+        if not text or not text.strip():
+            raise NoExtractableTextError("No extractable text found in PDF")
+        
+        if len(text.strip()) < MIN_EXTRACTED_TEXT_LENGTH:
+            raise PDFTextExtractionError(f"No meaningful text extracted from PDF: {pdf_path}")
+        
+        logger.info(f"PyMuPDF Extraktion erfolgreich - Pages: {page_count}, "
+                   f"Text length: {len(text)}, File: {pdf_path}, "
+                   f"Mode: {'parallel' if page_count > 10 else 'sequential'}")
+        
+        return ExtractedContent(
+            text=text.strip(),
+            page_count=page_count,
+            file_path=str(pdf_path),
+            metadata=metadata,
+            extraction_method="pymupdf"
+        )
     
     def _extract_pages_parallel(self, doc, page_count: int) -> str:
         """Parallele Seiten-Extraktion für große PDFs"""
@@ -872,14 +902,16 @@ class EnhancedPDFExtractor:
                 if failed_pages > 0:
                     logger.warning(f"Failed to extract {failed_pages}/{page_count} pages")
                 
-                if not text or len(text.strip()) < MIN_EXTRACTED_TEXT_LENGTH:
+                # Einheitliche Fehlermeldung wenn kein Text extrahierbar ist
+                if not text or not text.strip():
+                    raise NoExtractableTextError("No extractable text found in PDF")
+                
+                if len(text.strip()) < MIN_EXTRACTED_TEXT_LENGTH:
                     raise PDFTextExtractionError(f"No meaningful text extracted with PyPDF2: {pdf_path}")
                 
-                logger.info("PyPDF2 Extraktion erfolgreich", 
-                           pages=page_count, 
-                           text_length=len(text),
-                           file=str(pdf_path),
-                           failed_pages=failed_pages)
+                logger.info(f"PyPDF2 Extraktion erfolgreich - Pages: {page_count}, "
+                           f"Text length: {len(text)}, File: {pdf_path}, "
+                           f"Failed pages: {failed_pages}")
                 
                 return ExtractedContent(
                     text=text.strip(),
@@ -932,9 +964,8 @@ class EnhancedPDFExtractor:
             logger.warning("Keine PDF-Dateien gefunden", directory=str(pdf_dir))
             return []
         
-        logger.info("Batch-Extraktion mit Chunking gestartet", 
-                   pdf_count=len(pdf_files),
-                   chunking_strategy=chunking_strategy.value)
+        logger.info(f"Batch-Extraktion mit Chunking gestartet - {len(pdf_files)} PDFs, "
+                   f"Strategy: {chunking_strategy.value}")
         
         extracted_contents = []
         
@@ -955,9 +986,8 @@ class EnhancedPDFExtractor:
                 logger.error(f"PDF-Verarbeitung fehlgeschlagen für {pdf_file.name}: {e}", exc_info=True)
                 continue
         
-        logger.info("Batch-Extraktion abgeschlossen", 
-                   successful=len(extracted_contents),
-                   failed=len(pdf_files) - len(extracted_contents))
+        logger.info(f"Batch-Extraktion abgeschlossen - Successful: {len(extracted_contents)}, "
+                   f"Failed: {len(pdf_files) - len(extracted_contents)}")
         
         return extracted_contents
     

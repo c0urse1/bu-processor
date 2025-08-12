@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import List, Optional, Literal, Dict, Any, Union
 from enum import Enum
 
-from pydantic import BaseSettings, Field, validator, root_validator
-from pydantic.types import PositiveInt, PositiveFloat, DirectoryPath
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic.types import PositiveInt, PositiveFloat
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +88,9 @@ class MLModelConfig(BaseSettings):
         description="GPU-Nutzung aktivieren falls verfügbar"
     )
     
-    @validator('model_path')
-    def validate_model_path(cls, v):
+    @field_validator('model_path')
+    @classmethod
+    def validate_model_path(cls, v: str):
         """Überprüfe ob Model-Pfad existiert oder erstellt werden kann"""
         path = Path(v)
         if not path.exists():
@@ -97,8 +99,9 @@ class MLModelConfig(BaseSettings):
             logger.info(f"Model-Pfad erstellt: {path.parent}")
         return v
     
-    @validator('sentence_transformer_model')
-    def validate_sentence_transformer_model(cls, v):
+    @field_validator('sentence_transformer_model')
+    @classmethod
+    def validate_sentence_transformer_model(cls, v: str):
         """Validiere Sentence Transformer Model Name"""
         # Gültige Modell-Präfixe und bekannte Modelle
         valid_prefixes = [
@@ -203,8 +206,9 @@ class PDFProcessingConfig(BaseSettings):
         description="Unterstützte Dateierweiterungen"
     )
     
-    @validator('cache_dir')
-    def validate_cache_dir(cls, v):
+    @field_validator('cache_dir')
+    @classmethod
+    def validate_cache_dir(cls, v: str):
         """Erstelle Cache-Verzeichnis falls nicht vorhanden"""
         path = Path(v)
         path.mkdir(parents=True, exist_ok=True)
@@ -239,9 +243,13 @@ class APIConfig(BaseSettings):
         description="Secret Key für JWT/Sessions"
     )
     
-    @validator('api_key')
-    def validate_api_key(cls, v, values):
+    @field_validator('api_key')
+    @classmethod
+    def validate_api_key(cls, v: Optional[str], info):
         """Validiere API Key falls gesetzt oder in Production required"""
+        # Get values from context
+        values = info.data if hasattr(info, 'data') else {}
+        
         # Prüfe ob wir in Production sind (falls Environment bereits gesetzt)
         environment = values.get('environment', os.getenv('BU_PROCESSOR_ENVIRONMENT', 'development'))
         is_production = environment == 'production' or environment == Environment.PRODUCTION
@@ -305,8 +313,9 @@ class VectorDatabaseConfig(BaseSettings):
         description="Vector Database Integration aktivieren"
     )
     
-    @validator('pinecone_api_key')
-    def validate_pinecone_key(cls, v):
+    @field_validator('pinecone_api_key')
+    @classmethod
+    def validate_pinecone_key(cls, v: Optional[str]):
         """Validiere Pinecone API Key falls gesetzt"""
         if v and (len(v) < 10 or not v.startswith(('pc-', 'sk-'))):
             raise ValueError("Ungültiger Pinecone API Key Format")
@@ -502,8 +511,9 @@ class OpenAIConfig(BaseSettings):
         description="Chatbot Integration aktivieren"
     )
     
-    @validator('openai_api_key')
-    def validate_openai_key(cls, v):
+    @field_validator('openai_api_key')
+    @classmethod
+    def validate_openai_key(cls, v: Optional[str]):
         """Validiere OpenAI API Key falls gesetzt"""
         if v and not v.startswith('sk-'):
             raise ValueError("OpenAI API Key muss mit 'sk-' beginnen")
@@ -564,50 +574,50 @@ class BUProcessorConfig(BaseSettings):
         description="Anwendungsversion"
     )
     
-    @root_validator
-    def configure_environment_settings(cls, values):
+    @model_validator(mode="after")
+    def configure_environment_settings(self):
         """Konfiguriere Settings basierend auf Environment"""
-        env = values.get('environment', Environment.DEVELOPMENT)
+        env = self.environment
         
         if env == Environment.PRODUCTION:
             # Production: Sicherheits- und Performance-optimiert
-            values['debug'] = False
-            values['log_level'] = LogLevel.WARNING
+            self.debug = False
+            self.log_level = LogLevel.WARNING
             
             # Reduzierte Limits für Stabilität
-            if 'pdf_processing' in values:
-                pdf_config = values['pdf_processing']
+            if hasattr(self, 'pdf_processing') and self.pdf_processing:
+                pdf_config = self.pdf_processing
                 pdf_config.max_pdf_size_mb = min(pdf_config.max_pdf_size_mb, 25)
                 pdf_config.max_batch_pdf_count = min(pdf_config.max_batch_pdf_count, 10)
                 pdf_config.enable_cache = False  # Kein Cache in Production
             
             # Zusätzliche Production-Validierung
-            api_config = values.get('api')
-            if api_config and not api_config.secret_key:
+            if hasattr(self, 'api') and self.api and not self.api.secret_key:
                 logger.warning("Production ohne SECRET_KEY - bitte setzen für sichere Sessions")
         
         elif env == Environment.STAGING:
             # Staging: Production-nah aber mit mehr Logging
-            values['debug'] = False
-            values['log_level'] = LogLevel.INFO
+            self.debug = False
+            self.log_level = LogLevel.INFO
             
-            if 'pdf_processing' in values:
-                pdf_config = values['pdf_processing']
+            if hasattr(self, 'pdf_processing') and self.pdf_processing:
+                pdf_config = self.pdf_processing
                 pdf_config.max_pdf_size_mb = min(pdf_config.max_pdf_size_mb, 50)
         
         elif env == Environment.DEVELOPMENT:
             # Development: Maximale Flexibilität und Debugging
-            values['debug'] = True
-            values['log_level'] = LogLevel.DEBUG
+            self.debug = True
+            self.log_level = LogLevel.DEBUG
             
-            if 'pdf_processing' in values:
-                pdf_config = values['pdf_processing']
+            if hasattr(self, 'pdf_processing') and self.pdf_processing:
+                pdf_config = self.pdf_processing
                 pdf_config.max_pdf_size_mb = 100  # Größere Limits für Tests
                 pdf_config.max_batch_pdf_count = 50
         
-        return values
+        return self
     
-    @validator('environment', pre=True)
+    @field_validator('environment', mode='before')
+    @classmethod
     def parse_environment(cls, v):
         """Parse Environment aus String oder ENV-Variable"""
         if isinstance(v, str):
@@ -709,20 +719,21 @@ class BUProcessorConfig(BaseSettings):
         except Exception as e:
             raise ValueError(f"Fehler beim Laden der YAML-Konfiguration: {e}")
     
-    class Config:
+    model_config = SettingsConfigDict(
         # Environment-Variable Prefixes
-        env_prefix = "BU_PROCESSOR_"
-        env_nested_delimiter = "__"
+        env_prefix="BU_PROCESSOR_",
+        env_nested_delimiter="__",
         
         # Environment file loading
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+        env_file=".env",
+        env_file_encoding="utf-8",
         
         # Case sensitivity
-        case_sensitive = False
+        case_sensitive=False,
         
         # Allow extra fields for future extensions
-        extra = "ignore"
+        extra="ignore"
+    )
 
 # ============================================================================
 # CONFIGURATION FACTORY
