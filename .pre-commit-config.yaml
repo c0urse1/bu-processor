@@ -1,0 +1,31 @@
+# Pre-commit configuration for CI/CD quality gates
+repos:
+  - repo: local
+    hooks:
+      - id: forbid-tests-in-package
+        name: forbid tests inside package directory
+        entry: bash -c "if git diff --cached --name-only | grep -E '^bu_processor/bu_processor/.+test.*\\.py$'; then echo 'ERROR: Tests dürfen nicht in bu_processor/bu_processor/ liegen. Verwende tests/ stattdessen.'; exit 1; fi"
+        language: system
+        pass_filenames: false
+        
+      - id: forbid-debug-files
+        name: forbid debug files in commits
+        entry: bash -c "if git diff --cached --name-only | grep -E '(debug_|temp_|backup_).*\\.py$'; then echo 'ERROR: Debug/Temp/Backup-Dateien sollten nicht committed werden.'; exit 1; fi"
+        language: system
+        pass_filenames: false
+        
+      - id: check-pytest-structure
+        name: ensure pytest structure compliance
+        entry: bash -c "if git diff --cached --name-only | grep -E 'test_.*\\.py$' | grep -v '^tests/'; then echo 'WARNING: Test-Dateien sollten im tests/ Verzeichnis liegen.'; fi"
+        language: system
+        pass_filenames: false
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
