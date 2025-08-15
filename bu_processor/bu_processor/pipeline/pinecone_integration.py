@@ -16,7 +16,39 @@ ENHANCED FEATURES:
 - Comprehensive Error Handling
 """
 
+from __future__ import annotations
+
 import os
+import logging
+logger = logging.getLogger("pinecone_integration")
+
+# Availability-Flags *nur* hier setzen:
+try:
+    import pinecone  # offizielles SDK v3
+    from pinecone import Pinecone, ServerlessSpec
+    PINECONE_AVAILABLE = True
+except ImportError:
+    pinecone = None  # type: ignore
+    Pinecone = None  # type: ignore
+    ServerlessSpec = None  # type: ignore
+    PINECONE_AVAILABLE = False
+
+# Async-Flag (falls ihr spätere Async-Pfade nutzt):
+PINECONE_ASYNC_AVAILABLE = False  # auf True setzen, wenn ihr einen echten Async-Client nutzt
+
+# Umgebungsvariablen (Tests können hier steuern)
+ALLOW_EMPTY_PINECONE_KEY = os.getenv("ALLOW_EMPTY_PINECONE_KEY", "0") == "1"
+DEFAULT_INDEX_NAME = os.getenv("PINECONE_INDEX", "bu-processor-embeddings")
+
+def _get_api_key() -> str | None:
+    # harmonisiert alle möglichen Env-Namen
+    return (
+        os.getenv("PINECONE_API_KEY")
+        or os.getenv("PINECONE_KEY")
+        or os.getenv("PC_API_KEY")
+        or None
+    )
+
 import time
 import random
 import hashlib
@@ -47,29 +79,6 @@ try:
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
-
-# Pinecone Integration with Async Support
-try:
-    import pinecone
-    from pinecone import Pinecone, ServerlessSpec
-    # Check for async support
-    try:
-        from pinecone.core.client.models import Vector
-        PINECONE_ASYNC_AVAILABLE = True
-    except ImportError:
-        PINECONE_ASYNC_AVAILABLE = False
-    PINECONE_AVAILABLE = True
-except ImportError as e:
-    # Handle pinecone dependency issues gracefully
-    Pinecone = None  # type: ignore
-    ServerlessSpec = None  # type: ignore
-    Vector = None  # type: ignore
-    PINECONE_AVAILABLE = False
-    PINECONE_ASYNC_AVAILABLE = False
-    PINECONE_AVAILABLE = True
-except ImportError:
-    PINECONE_AVAILABLE = False
-    PINECONE_ASYNC_AVAILABLE = False
 
 # Embedding Generation
 try:
@@ -586,7 +595,10 @@ class AsyncPineconeManager:
         self.batch_semaphore = asyncio.Semaphore(config.max_concurrent_batches)
 
         if self.stub_mode:
-            logger.warning("AsyncPineconeManager running in STUB MODE (no network calls)")
+            if ALLOW_EMPTY_PINECONE_KEY:
+                logger.debug("AsyncPineconeManager initialized in stub mode (test environment)")
+            else:
+                logger.warning("AsyncPineconeManager running in STUB MODE (no network calls)")
         else:
             self._initialize_client()
         
@@ -1822,6 +1834,109 @@ def demo_main():
     """Demo function that can be called from other modules"""
     asyncio.run(demo_enhanced_pinecone_integration())
 
+# =============================================================================
+# PINECONE MANAGER CLASSES AND FACTORY
+# =============================================================================
+
+class PineconeManager:
+    """Synchroner, einfacher Wrapper um pinecone.Pinecone (falls verfügbar)."""
+
+    def __init__(self, api_key: str, index_name: str = DEFAULT_INDEX_NAME, dimension: int = 384, metric: str = "cosine"):
+        self.index_name = index_name
+        self._client = Pinecone(api_key=api_key) if (Pinecone and api_key) else None
+        self._index = None
+        if self._client:
+            if self.index_name not in [i["name"] for i in self._client.list_indexes()]:
+                # Serverless Beispiel-Spec; falls Region o.ä. gebraucht wird, hier aus Env laden
+                spec = ServerlessSpec(cloud="aws", region="us-east-1") if ServerlessSpec else None
+                self._client.create_index(
+                    name=self.index_name,
+                    dimension=dimension,
+                    metric=metric,
+                    spec=spec,
+                )
+            self._index = self._client.Index(self.index_name)
+
+    def upsert_vectors(self, vectors: list[tuple[str, list[float], dict]]):
+        if not self._index:
+            return {"upserted": 0}
+        # v3: self._index.upsert(vectors=[{"id":..., "values":..., "metadata":...}, ...])
+        payload = [{"id": vid, "values": vals, "metadata": meta} for vid, vals, meta in vectors]
+        self._index.upsert(vectors=payload)
+        return {"upserted": len(payload)}
+
+    def search_similar_documents(self, query: str, top_k: int = 3, vector: list[float] | None = None):
+        if not self._index:
+            return []
+        if vector is None:
+            # wenn kein Embedder hier verfügbar ist, erwarte vector mitgegeben
+            raise ValueError("vector required when no embedder is wired")
+        res = self._index.query(vector=vector, top_k=top_k, include_metadata=True)
+        # Normalisieren (je nach SDK-Version)
+        matches = getattr(res, "matches", []) or res.get("matches", [])
+        out = []
+        for m in matches:
+            mid = getattr(m, "id", None) or m.get("id")
+            score = getattr(m, "score", None) or m.get("score", 0.0)
+            md = getattr(m, "metadata", None) or m.get("metadata", {})
+            out.append({"id": mid, "score": float(score), "metadata": md})
+        return out
+
+def get_pinecone_manager(index_name: str = DEFAULT_INDEX_NAME, *, force_stub: bool | None = None):
+    """Zentrale Factory: liefert realen Manager oder Stub."""
+    api_key = _get_api_key()
+    use_stub = bool(force_stub) if force_stub is not None else (not PINECONE_AVAILABLE or not api_key)
+    if use_stub and not ALLOW_EMPTY_PINECONE_KEY:
+        logger.warning("Pinecone not available or API key missing. Using STUB mode.")
+    if use_stub:
+        return PineconeManagerStub(index_name=index_name)
+    return PineconeManager(api_key=api_key, index_name=index_name)
+
+# =============================================================================
+# STUB MANAGER FOR TESTING AND FALLBACK
+# =============================================================================
+
+class PineconeManagerStub:
+    """Test-/Fallback-Implementation ohne Netzwerkaufrufe."""
+    
+    _stub_logged = False  # Class-wide flag to prevent duplicate logging
+
+    def __init__(self, *args, **kwargs):
+        self.index_name = kwargs.get("index_name") or DEFAULT_INDEX_NAME
+        
+        # Log stub mode with appropriate level based on test environment
+        if not PineconeManagerStub._stub_logged:
+            if ALLOW_EMPTY_PINECONE_KEY:
+                logger.debug("PineconeManagerStub initialized (test mode - no network calls)")
+            else:
+                logger.warning("PineconeManagerStub running in STUB MODE (no network calls)")
+            PineconeManagerStub._stub_logged = True
+
+    def upsert_vectors(self, *args, **kwargs):
+        return {"upserted": len(kwargs.get("vectors") or [])}
+
+    def search_similar_documents(self, *args, **kwargs):
+        # Liefere deterministisches Dummy-Ergebnis zurück
+        top_k = kwargs.get("top_k", 3)
+        return [{"id": f"doc_{i}", "score": 0.0, "metadata": {}} for i in range(top_k)]
+
+    def delete_index(self, *args, **kwargs):
+        return True
+
 if __name__ == "__main__":
     # Default to main async entry point
     sync_main()
+
+# =============================================================================
+# PUBLIC API EXPORTS
+# =============================================================================
+
+__all__ = [
+    "PineconeManager",
+    "PineconeManagerStub", 
+    "get_pinecone_manager",
+    "AsyncPineconeConfig",
+    "AsyncPineconePipeline",
+    "PINECONE_AVAILABLE",
+    "PINECONE_ASYNC_AVAILABLE",
+]

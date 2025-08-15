@@ -1299,8 +1299,8 @@ def setup_test_environment():
     os.environ["LOG_LEVEL"] = "WARNING"  # Weniger Logs in Tests
     
     # Mock externe API-Keys für Tests
-    os.environ["OPENAI_API_KEY"] = "test_key_openai"
-    os.environ["PINECONE_API_KEY"] = "test_key_pinecone"
+    os.environ["OPENAI_API_KEY"] = "sk-test_key_openai_for_development"
+    os.environ["PINECONE_API_KEY"] = "pc-test-key-for-development-only"
     os.environ["PINECONE_ENVIRONMENT"] = "test_env"
     
     yield

@@ -5,6 +5,7 @@ import math
 import os
 import random
 import sys
+import threading
 import time
 from datetime import datetime
 from functools import wraps
@@ -378,6 +379,9 @@ class RealMLClassifier:
             lazy_env = os.getenv("BUPROC_LAZY_MODELS") or os.getenv("BU_LAZY_MODELS")
             lazy = (lazy_env or "").strip().lower() in {"1", "true", "yes"}
         self._lazy = bool(lazy)
+        
+        # Thread-safe loading lock
+        self._load_lock = threading.Lock()
 
         # Defer heavy model init if lazy enabled
         if not self._lazy:
@@ -821,6 +825,51 @@ class RealMLClassifier:
             # Fallback für unbekannte Modelle
             return [f"label_{i}" for i in range(self.model.config.num_labels if hasattr(self.model, 'config') else 2)]
 
+    @property
+    def is_loaded(self) -> bool:
+        """True when both model and tokenizer are available."""
+        return getattr(self, "model", None) is not None and getattr(self, "tokenizer", None) is not None
+
+    def ensure_models_loaded(self, *, force: bool = False) -> None:
+        """
+        Load model & tokenizer if lazy-loading is enabled or force=True.
+        Thread-safe and idempotent.
+        """
+        # Already loaded and not forcing → nothing to do
+        if self.is_loaded and not force:
+            return
+
+        # If not lazy and not forcing, skip
+        if not getattr(self, "_lazy", False) and not force:
+            return
+
+        # Thread-safe, double-checked loading
+        with self._load_lock:
+            if self.is_loaded and not force:
+                return
+
+            # Reuse your existing loader (prefer the one already used everywhere)
+            # If your project uses _load_model_and_tokenizer(), call that:
+            if hasattr(self, "_load_model_and_tokenizer"):
+                self._load_model_and_tokenizer()
+            # If not, fall back to your init routine name:
+            elif hasattr(self, "_initialize_model"):
+                self._initialize_model()
+            else:
+                raise RuntimeError("No loader method found (expected _load_model_and_tokenizer or _initialize_model).")
+
+            # Optional: once loaded, consider lazy mode off
+            self._lazy = False
+
+            # Optional logging (use your project logger if present)
+            if hasattr(self, "logger"):
+                self.logger.info("models loaded via ensure_models_loaded", lazy_mode=False)
+
+    def make_eager(self) -> None:
+        """Turn lazy mode off by loading immediately."""
+        self._lazy = True  # force ensure_models_loaded() to do work
+        self.ensure_models_loaded()
+
     @with_retry_and_timeout(max_retries=3, timeout_seconds=30.0)
     def classify_text(self, text: str) -> Union[Dict[str, Any], ClassificationResult]:
         """Klassifiziert den Input-Text in vordefinierte Kategorien.
@@ -834,6 +883,9 @@ class RealMLClassifier:
         Raises:
             ClassificationRetryError: Nach fehlgeschlagenen Retry-Versuchen
         """
+        if getattr(self, "_lazy", False) and not self.is_loaded:
+            self.ensure_models_loaded()
+        
         try:
             # Führe Modell-Inferenz durch
             logits = self._forward_logits(text)
@@ -880,6 +932,9 @@ class RealMLClassifier:
             TypeError: Falls texts keine Liste ist
             ValueError: Falls texts leer ist
         """
+        if getattr(self, "_lazy", False) and not self.is_loaded:
+            self.ensure_models_loaded()
+        
         if not isinstance(texts, list):
             raise TypeError("texts must be a list[str]")
         
@@ -1072,6 +1127,9 @@ class RealMLClassifier:
         Diese Methode nutzt einen injizierten PDF-Extractor falls verfügbar,
         andernfalls externe Utility-Funktionen für die PDF-Extraktion.
         """
+        if getattr(self, "_lazy", False) and not self.is_loaded:
+            self.ensure_models_loaded()
+        
         try:
             # Verwende injizierten PDF-Extractor falls vorhanden
             extractor = getattr(self, "pdf_extractor", None)
@@ -1123,6 +1181,10 @@ class RealMLClassifier:
         Returns:
             Klassifikationsergebnis
         """
+        if getattr(self, "_lazy", False) and not self.is_loaded:
+            self.ensure_models_loaded()
+        
+        logger = get_logger(__name__)
         logger.info("Klassifikation von bereits extrahiertem Content", 
                    file=extracted_content.file_path,
                    pages=extracted_content.page_count,
@@ -1277,6 +1339,9 @@ class RealMLClassifier:
         
         Diese Methode nutzt externe Utility-Funktionen für die PDF-Extraktion.
         """
+        if getattr(self, "_lazy", False) and not self.is_loaded:
+            self.ensure_models_loaded()
+        
         try:
             # Alle PDFs extrahieren über externe Utility-Funktion
             extracted_contents = extract_multiple_pdfs(pdf_directory)
@@ -1685,3 +1750,7 @@ def demo_enhanced_classifier() -> None:
 # Beispiel zur Nutzung des Enhanced Classifiers
 if __name__ == "__main__":
     demo_enhanced_classifier()
+
+
+# Export symbol
+__all__ = ["RealMLClassifier"]

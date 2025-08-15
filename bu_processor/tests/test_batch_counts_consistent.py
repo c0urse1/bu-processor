@@ -17,7 +17,7 @@ class TestBatchCountsConsistent:
         results = [
             ClassificationResult(
                 text="a", 
-                category="x", 
+                category=1, 
                 confidence=0.9,
                 error=None,
                 is_confident=True,
@@ -55,7 +55,7 @@ class TestBatchCountsConsistent:
                 raise ValueError("Test error")
             return ClassificationResult(
                 text=text,
-                category="test",
+                category=2,
                 confidence=0.8,
                 error=None,
                 is_confident=True,
@@ -98,7 +98,7 @@ class TestBatchCountsConsistent:
         all_success_results = [
             ClassificationResult(
                 text=f"success_{i}",
-                category="class_a",
+                category=3,
                 confidence=0.9,
                 error=None,
                 is_confident=True,
@@ -131,7 +131,7 @@ class TestBatchCountsConsistent:
             
             return ClassificationResult(
                 text=text,
-                category="odd_length",
+                category=4,
                 confidence=0.8,
                 error=None,
                 is_confident=True,
