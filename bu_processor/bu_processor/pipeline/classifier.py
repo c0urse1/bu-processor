@@ -12,8 +12,30 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-import torch
+# --- Safe torch import for tests ---
+try:
+    import torch
+except Exception:  # torch not installed or partially mocked
+    torch = None
+
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+def _pick_device(use_gpu: bool | None) -> str:
+    """
+    Resolve device deterministically and defensively.
+    - If use_gpu is True and torch+CUDA available -> 'cuda'
+    - Otherwise -> 'cpu'
+    Never crash if torch is missing or mocked.
+    """
+    if use_gpu and torch is not None:
+        try:
+            is_avail = getattr(getattr(torch, "cuda", None), "is_available", None)
+            if callable(is_avail):
+                return "cuda" if is_avail() else "cpu"
+        except Exception:
+            # If mocked CUDA throws or is weird in tests, fall back to CPU
+            return "cpu"
+    return "cpu"
 
 # Strukturiertes Logging
 from ..core.logging_setup import get_logger
@@ -360,11 +382,13 @@ class RealMLClassifier:
             timeout_seconds: Timeout in Sekunden für Operations
         """
         
-        # Lade Konfiguration für Confidence-Threshold
+        # Lade Konfiguration für Confidence-Threshold und GPU-Nutzung
         cfg = get_config()
         self.confidence_threshold = cfg.ml_model.classifier_confidence_threshold
         
-        self.device = torch.device('cuda' if torch.cuda.is_available() and USE_GPU else 'cpu')
+        # Safe device selection using config-driven GPU preference
+        device_str = _pick_device(cfg.ml_model.use_gpu)
+        self.device = torch.device(device_str) if torch is not None else "cpu"
         self.batch_size = batch_size
         self.max_retries = max_retries
         self.timeout_seconds = timeout_seconds
@@ -528,10 +552,11 @@ class RealMLClassifier:
         
         return ClassificationResult(
             text=text,
-            category=top_label,
+            category=best_idx,  # Use index instead of label string
             confidence=top_prob,
             error=None,
             is_confident=is_confident,
+            label=top_label,  # Store label in the label field
             metadata={
                 "all_probabilities": dict(zip(labels, [self._clip01(p) for p in probs])),
                 "confidence_threshold": self.confidence_threshold,
@@ -771,9 +796,10 @@ class RealMLClassifier:
         
         return ClassificationResult(
             text=input_text,
-            category=top_label,
+            category=idx,  # Use index instead of label string
             confidence=top_prob,
             is_confident=(top_prob >= self.confidence_threshold),
+            label=top_label,  # Store label in the label field
             metadata={
                 "all_probabilities": dict(zip(labels, [self._clip01(p) for p in probs])) if len(labels) == len(probs) else {},
                 "threshold_used": self.confidence_threshold
@@ -887,6 +913,8 @@ class RealMLClassifier:
             self.ensure_models_loaded()
         
         try:
+            start_time = time.time()
+            
             # Führe Modell-Inferenz durch
             logits = self._forward_logits(text)
             labels = self._label_list()
@@ -897,7 +925,7 @@ class RealMLClassifier:
             # Zusätzliche Metadaten hinzufügen
             result.input_type = "text"
             result.text_length = len(text)
-            result.processing_time = time.time() - time.time()  # Wird überschrieben vom Retry-Wrapper
+            result.processing_time = max(0.0, time.time() - start_time)  # Ensure non-negative
             result.model_version = "v1.0"
             
             return result

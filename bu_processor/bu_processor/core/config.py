@@ -94,6 +94,22 @@ class MLModelConfig(BaseSettings):
         description="GPU-Nutzung aktivieren falls verfügbar"
     )
     
+    @field_validator('use_gpu', mode='before')
+    @classmethod
+    def validate_use_gpu(cls, v):
+        """Parse use_gpu from various string formats."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            v = v.strip().lower()
+            if v in ('true', '1', 'yes', 'on'):
+                return True
+            elif v in ('false', '0', 'no', 'off'):
+                return False
+            else:
+                raise ValueError(f"Invalid boolean value: '{v}'")
+        return bool(v)
+    
     @field_validator('model_path')
     @classmethod
     def validate_model_path(cls, v: str):
@@ -579,6 +595,30 @@ class BUProcessorConfig(BaseSettings):
         default="3.0.0",
         description="Anwendungsversion"
     )
+    
+    # Hardware Configuration
+    use_gpu: bool = Field(
+        default=False,
+        alias="BU_USE_GPU",
+        description="Use GPU for ML operations if available (falls back to CPU if CUDA unavailable)"
+    )
+    
+    @field_validator('use_gpu', mode='before')
+    @classmethod
+    def parse_use_gpu(cls, v):
+        """Parse use_gpu from various string representations"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            # Handle common string representations
+            v = v.strip().lower()
+            if v in ('1', 'true', 'yes', 'on', 'enable', 'enabled'):
+                return True
+            elif v in ('0', 'false', 'no', 'off', 'disable', 'disabled', ''):
+                return False
+            else:
+                raise ValueError(f"Invalid boolean string: '{v}'. Use '1'/'0', 'true'/'false', etc.")
+        return bool(v)
     
     @model_validator(mode="after")
     def configure_environment_settings(self):

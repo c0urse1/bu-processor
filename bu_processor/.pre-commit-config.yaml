@@ -56,3 +56,29 @@ repos:
     hooks:
       - id: bandit
         language_version: python3
+
+  # ========================================================================
+  # CUSTOM REPO HYGIENE CHECKS
+  # ========================================================================
+  - repo: local
+    hooks:
+      - id: no-tests-in-package
+        name: 🧪 Ensure tests stay outside package directory
+        entry: bash -c 'if git diff --cached --name-only | grep -E "^bu_processor/bu_processor/.+test_.+\.py$"; then echo "❌ Tests must not live in package dir (bu_processor/bu_processor/). Place them in tests/ or bu_processor/tests/"; exit 1; fi'
+        language: system
+        always_run: true
+        pass_filenames: false
+        
+      - id: no-test-imports-in-package
+        name: 🧪 Ensure no test imports in production code
+        entry: bash -c 'if git diff --cached --name-only | grep -E "^bu_processor/bu_processor/.+\.py$" | xargs grep -l "import.*test" 2>/dev/null; then echo "❌ Production code should not import test modules"; exit 1; fi'
+        language: system
+        always_run: true
+        pass_filenames: false
+        
+      - id: check-test-file-placement
+        name: 🧪 Verify test files are in correct directories
+        entry: bash -c 'if git diff --cached --name-only | grep -E "test_.+\.py$" | grep -v -E "^(tests/|bu_processor/tests/)"; then echo "⚠️ Test files should be in tests/ or bu_processor/tests/ directories"; fi'
+        language: system
+        always_run: true
+        pass_filenames: false

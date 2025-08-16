@@ -23,7 +23,8 @@ class TestFinalVerification:
         labels = ["neg", "pos", "neu"]
         res = clf._postprocess_logits(logits, labels)
         
-        assert res.category == "pos"
+        assert res.category == 1  # Index of "pos" in labels
+        assert res.label == "pos"  # String label
         assert res.confidence > 0.95
         assert res.is_confident is True
     
@@ -39,7 +40,8 @@ class TestFinalVerification:
             "test document"
         )
         
-        assert result.category == "other"
+        assert result.category == 1  # Index of "other" in labels 
+        assert result.label == "other"  # String label
         assert result.confidence > 0.99
         assert result.is_confident is True
         
@@ -104,7 +106,8 @@ class TestFinalVerification:
         
         # Muss geclippt sein
         assert 0.0 <= result.confidence <= 1.0
-        assert result.category == "high"  # Höchste logit
+        assert result.category == 1  # Index of "high" in labels
+        assert result.label == "high"  # String label
         
         # Metadata auch geclippt
         if "all_probabilities" in result.metadata:
@@ -146,7 +149,8 @@ class TestFinalVerification:
             
             # Sanity checks
             assert result.text == text
-            assert result.category in ["class_0", "class_1"]
+            assert result.category in [0, 1]  # Integer indices 
+            assert result.label in ["class_0", "class_1"]  # String labels
             assert 0.0 <= result.confidence <= 1.0  # Numerical tolerance
             assert result.is_confident == expected_confident  # Threshold logic
             assert result.error is None

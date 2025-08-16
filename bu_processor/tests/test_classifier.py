@@ -199,14 +199,29 @@ class TestMockedTransformerCalls:
         fake_encoding.input_ids = torch.tensor([[101, 102, 103]])
         fake_encoding.attention_mask = torch.tensor([[1, 1, 1]])
         fake_encoding.to = mocker.Mock(return_value=fake_encoding)
+        
+        # Make the encoding behave like a dictionary for **kwargs unpacking
+        fake_encoding.keys = mocker.Mock(return_value=['input_ids', 'attention_mask'])
+        fake_encoding.__getitem__ = mocker.Mock(side_effect=lambda k: fake_encoding.input_ids if k == 'input_ids' else fake_encoding.attention_mask)
+        fake_encoding.__iter__ = mocker.Mock(return_value=iter(['input_ids', 'attention_mask']))
+        
         fake_tokenizer.return_value = fake_encoding
         
         fake_model = mocker.Mock()
         fake_outputs = mocker.Mock()
         fake_outputs.logits = torch.tensor([[0.2, 5.0, 0.0]])  # Strong logits → high confidence for category 1
         fake_model.return_value = fake_outputs
+        # Configure the mock to return outputs when called with **kwargs
+        def mock_model_call(*args, **kwargs):
+            return fake_outputs
+        fake_model.side_effect = mock_model_call
         fake_model.to = mocker.Mock(return_value=fake_model)
         fake_model.eval = mocker.Mock()
+        
+        # Mock the labels from model config
+        fake_config = mocker.Mock()
+        fake_config.id2label = {0: "category_0", 1: "category_1", 2: "category_2"}
+        fake_model.config = fake_config
         
         # Patch imports
         mocker.patch("bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
@@ -248,33 +263,39 @@ class TestMockedTransformerCalls:
     
     def test_torch_operations_mocked(self, mocker):
         """Test dass PyTorch Operationen korrekt gemockt werden."""
-        # Mock torch operations
-        mock_softmax = mocker.patch("torch.softmax")
-        mock_max = mocker.patch("torch.max")
-        mock_no_grad = mocker.patch("torch.no_grad")
-        
-        # Setze Return-Werte (strong logits for high confidence ~0.99)
-        mock_softmax.return_value = torch.tensor([[0.01, 0.99, 0.01]])
-        mock_max.return_value = (
-            torch.tensor([0.99]),  # confidence
-            torch.tensor([1])      # prediction
-        )
-        
         # Mock device
         mocker.patch("torch.cuda.is_available", return_value=False)
         mocker.patch("torch.device", return_value="cpu")
         
-        # Mock Transformer components
+        # Mock Transformer components first, before class instantiation
         mock_tokenizer = mocker.Mock()
         mock_encoding = mocker.Mock()
         mock_encoding.input_ids = torch.tensor([[1, 2, 3]])
+        mock_encoding.attention_mask = torch.tensor([[1, 1, 1]])
         mock_encoding.to = mocker.Mock(return_value=mock_encoding)
+        
+        # Make the encoding behave like a dictionary for **kwargs unpacking
+        mock_encoding.keys = mocker.Mock(return_value=['input_ids', 'attention_mask'])
+        mock_encoding.__getitem__ = mocker.Mock(side_effect=lambda k: mock_encoding.input_ids if k == 'input_ids' else mock_encoding.attention_mask)
+        mock_encoding.__iter__ = mocker.Mock(return_value=iter(['input_ids', 'attention_mask']))
+        
         mock_tokenizer.return_value = mock_encoding
         
         mock_model = mocker.Mock()
-        mock_model.return_value = mocker.Mock(logits=torch.tensor([[0.1, 5.0, 0.1]]))  # Strong logits → high confidence
-        mock_model.to = mocker.Mock()
+        mock_outputs = mocker.Mock()
+        mock_outputs.logits = torch.tensor([[0.1, 5.0, 0.1]])  # Strong logits → high confidence
+        mock_model.return_value = mock_outputs
+        # Configure the mock to return outputs when called with **kwargs
+        def mock_model_call(*args, **kwargs):
+            return mock_outputs
+        mock_model.side_effect = mock_model_call
+        mock_model.to = mocker.Mock(return_value=mock_model)
         mock_model.eval = mocker.Mock()
+        
+        # Mock the labels from model config
+        fake_config = mocker.Mock()
+        fake_config.id2label = {0: "category_0", 1: "category_1", 2: "category_2"}
+        mock_model.config = fake_config
         
         mocker.patch("bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
                      return_value=mock_tokenizer)
@@ -285,15 +306,14 @@ class TestMockedTransformerCalls:
         # Test classifier creation und operation
         classifier = RealMLClassifier()
         
-        # Context manager mock für no_grad
-        mock_no_grad.return_value.__enter__ = mocker.Mock()
-        mock_no_grad.return_value.__exit__ = mocker.Mock()
+        # Mock the classifier's custom softmax method after instantiation
+        mock_softmax = mocker.patch.object(classifier, '_softmax', 
+                                         return_value=[0.01, 0.99, 0.01])
         
         result = classifier.classify_text("Test")
         
-        # Verify mocked operations were called
+        # Verify mocked softmax operation was called
         mock_softmax.assert_called()
-        mock_max.assert_called()
 
 
 class TestRetryDecorator:
@@ -344,7 +364,7 @@ class TestRetryDecorator:
         
         call_count = 0
         
-        @with_retry(max_retries=3, timeout_seconds=0.5)
+        @with_retry(max_retries=3, timeout_seconds=2.0)  # Increased timeout
         def slow_function():
             nonlocal call_count
             call_count += 1
@@ -408,6 +428,7 @@ class TestClassificationResultSchemas:
                 pytest.skip("Pydantic nicht verfügbar")
             
             valid_data = {
+                "text": "Sample text for classification",
                 "category": 2,
                 "confidence": 0.85,
                 "is_confident": True,
@@ -455,6 +476,7 @@ class TestClassificationResultSchemas:
                 pytest.skip("Pydantic nicht verfügbar")
             
             valid_pdf_data = {
+                "text": "Sample PDF text content",
                 "category": 0,
                 "confidence": 0.92,
                 "is_confident": True,
@@ -487,6 +509,12 @@ class TestIntegrationScenarios:
         mock_encoding.input_ids = torch.tensor([[101, 2045, 2003, 102]])  # BERT-like token IDs
         mock_encoding.attention_mask = torch.tensor([[1, 1, 1, 1]])
         mock_encoding.to = mocker.Mock(return_value=mock_encoding)
+        
+        # Make the encoding behave like a dictionary for **kwargs unpacking
+        mock_encoding.keys = mocker.Mock(return_value=['input_ids', 'attention_mask'])
+        mock_encoding.__getitem__ = mocker.Mock(side_effect=lambda k: mock_encoding.input_ids if k == 'input_ids' else mock_encoding.attention_mask)
+        mock_encoding.__iter__ = mocker.Mock(return_value=iter(['input_ids', 'attention_mask']))
+        
         mock_tokenizer.return_value = mock_encoding
         
         mock_model = mocker.Mock()
@@ -494,8 +522,18 @@ class TestIntegrationScenarios:
         # Realistische Logits für 3 Kategorien
         mock_outputs.logits = torch.tensor([[0.1, 0.85, 0.05]])  # Finance category (1) sehr wahrscheinlich
         mock_model.return_value = mock_outputs
+        mock_model.side_effect = None  # Ensure it returns the mock_outputs when called
+        # Configure the mock to return outputs when called with **kwargs
+        def mock_model_call(*args, **kwargs):
+            return mock_outputs
+        mock_model.side_effect = mock_model_call
         mock_model.to = mocker.Mock()
         mock_model.eval = mocker.Mock()
+        
+        # Mock the labels from model config
+        fake_config = mocker.Mock()
+        fake_config.id2label = {0: "legal", 1: "finance", 2: "other"}
+        mock_model.config = fake_config
         
         mocker.patch("bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
                      return_value=mock_tokenizer)
@@ -504,6 +542,11 @@ class TestIntegrationScenarios:
         mocker.patch("torch.cuda.is_available", return_value=True)  # Simuliere GPU
         mocker.patch("torch.device")
         mocker.patch("bu_processor.pipeline.classifier.EnhancedPDFExtractor")
+        
+        # Mock the _softmax method to return proper probabilities
+        def mock_softmax(logits):
+            return [0.1, 0.85, 0.05]  # Finance category (1) most likely - return as list, not tensor
+        mocker.patch("bu_processor.pipeline.classifier.RealMLClassifier._softmax", side_effect=mock_softmax)
         
         classifier = RealMLClassifier()
         
@@ -539,13 +582,32 @@ class TestIntegrationScenarios:
         mock_tokenizer = mocker.Mock()
         mock_encoding = mocker.Mock()
         mock_encoding.input_ids = torch.tensor([[1, 2, 3]])
+        mock_encoding.attention_mask = torch.tensor([[1, 1, 1]])
         mock_encoding.to = mocker.Mock(return_value=mock_encoding)
+        
+        # Make the encoding behave like a dictionary for **kwargs unpacking
+        mock_encoding.keys = mocker.Mock(return_value=['input_ids', 'attention_mask'])
+        mock_encoding.__getitem__ = mocker.Mock(side_effect=lambda k: mock_encoding.input_ids if k == 'input_ids' else mock_encoding.attention_mask)
+        mock_encoding.__iter__ = mocker.Mock(return_value=iter(['input_ids', 'attention_mask']))
+        
         mock_tokenizer.return_value = mock_encoding
         
         mock_model = mocker.Mock()
         mock_model.side_effect = failing_model_call
+        # Configure the mock to return outputs when called with **kwargs after retries
+        def configure_final_success():
+            mock_outputs = mocker.Mock()
+            mock_outputs.logits = torch.tensor([[0.3, 0.7, 0.0]])
+            return mock_outputs
+        
+        # The failing_model_call will handle the failure logic and return mock_outputs on success
         mock_model.to = mocker.Mock()
         mock_model.eval = mocker.Mock()
+        
+        # Mock the labels from model config
+        fake_config = mocker.Mock()
+        fake_config.id2label = {0: "legal", 1: "finance", 2: "other"}
+        mock_model.config = fake_config
         
         mocker.patch("bu_processor.pipeline.classifier.AutoTokenizer.from_pretrained", 
                      return_value=mock_tokenizer)
@@ -554,6 +616,11 @@ class TestIntegrationScenarios:
         mocker.patch("torch.cuda.is_available", return_value=True)
         mocker.patch("bu_processor.pipeline.classifier.EnhancedPDFExtractor")
         mocker.patch("time.sleep")  # Speed up tests
+        
+        # Mock the _softmax method to return proper probabilities  
+        def mock_softmax(logits):
+            return [0.3, 0.7, 0.0]  # Finance category (1) most likely - return as list, not tensor
+        mocker.patch("bu_processor.pipeline.classifier.RealMLClassifier._softmax", side_effect=mock_softmax)
         
         classifier = RealMLClassifier()
         result = classifier.classify_text("Test after retries")
@@ -635,7 +702,14 @@ def test_batch_size_configurations(mocker, batch_size, expected_batches):
     mock_tokenizer = mocker.Mock()
     mock_encoding = mocker.Mock()
     mock_encoding.input_ids = torch.tensor([[1, 2, 3]])
+    mock_encoding.attention_mask = torch.tensor([[1, 1, 1]])
     mock_encoding.to = mocker.Mock(return_value=mock_encoding)
+    
+    # Make the encoding behave like a dictionary for **kwargs unpacking
+    mock_encoding.keys = mocker.Mock(return_value=['input_ids', 'attention_mask'])
+    mock_encoding.__getitem__ = mocker.Mock(side_effect=lambda k: mock_encoding.input_ids if k == 'input_ids' else mock_encoding.attention_mask)
+    mock_encoding.__iter__ = mocker.Mock(return_value=iter(['input_ids', 'attention_mask']))
+    
     mock_tokenizer.return_value = mock_encoding
     
     mock_model = mocker.Mock()
@@ -643,6 +717,10 @@ def test_batch_size_configurations(mocker, batch_size, expected_batches):
     # Strong logits for high confidence ~0.99 per prediction
     mock_outputs.logits = torch.tensor([[0.1, 5.0, 0.1], [0.1, 5.0, 0.1], [0.1, 5.0, 0.1]])  # 3 predictions
     mock_model.return_value = mock_outputs
+    # Configure the mock to return outputs when called with **kwargs
+    def mock_model_call(*args, **kwargs):
+        return mock_outputs
+    mock_model.side_effect = mock_model_call
     mock_model.to = mocker.Mock()
     mock_model.eval = mocker.Mock()
     

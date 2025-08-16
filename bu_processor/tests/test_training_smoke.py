@@ -21,5 +21,6 @@ def test_train_runs(tmp_path, dummy_train_val):
         max_length=128,
         learning_rate=5e-5
     )
+    
     out_dir = train(cfg)
     assert (tmp_path / "artifacts").exists()

@@ -33,6 +33,7 @@ class TestEnhancedPDFExtractor:
         """Mock für PyMuPDF fitz Document."""
         mock_doc = mocker.Mock()
         mock_doc.__len__ = mocker.Mock(return_value=3)  # 3 Seiten
+        mock_doc.page_count = 3  # Add explicit page_count for range() compatibility
         mock_doc.needs_pass = False
         mock_doc.is_pdf = True
         mock_doc.metadata = {"title": "Test Document", "author": "Test Author"}
@@ -45,6 +46,8 @@ class TestEnhancedPDFExtractor:
         mock_page3 = mocker.Mock()
         mock_page3.get_text.return_value = "Dritte Seite zum Abschluss."
         
+        # Set up both indexing and load_page access
+        mock_doc.__getitem__ = mocker.Mock(side_effect=[mock_page1, mock_page2, mock_page3])
         mock_doc.load_page.side_effect = [mock_page1, mock_page2, mock_page3]
         
         return mock_doc
@@ -629,15 +632,28 @@ class TestOCRIntegration:
         mocker.patch("bu_processor.pipeline.pdf_extractor.OCR_AVAILABLE", True)
         
         mock_pytesseract = mocker.patch("bu_processor.pipeline.pdf_extractor.pytesseract")
-        mock_pytesseract.image_to_string.return_value = "OCR extrahierter Text"
+        mock_pytesseract.image_to_string.return_value = "This is a very long and meaningful OCR extracted text that should definitely pass the meaningful text validation because it contains many alphanumeric characters."
         
-        mock_pil_image = mocker.patch("bu_processor.pipeline.pdf_extractor.Image")
+        # Also patch the ocr object directly
+        mock_ocr = mocker.patch("bu_processor.pipeline.pdf_extractor.ocr")
+        mock_ocr.image_to_string.return_value = "This is a very long and meaningful OCR extracted text that should definitely pass the meaningful text validation because it contains many alphanumeric characters."
+        
+        # Mock PIL.Image directly instead of the imported Image
+        mock_pil_image = mocker.patch("PIL.Image")
         mock_image_instance = Mock()
         mock_pil_image.open.return_value = mock_image_instance
+        
+        # Add Image to the module since it might not exist due to conditional import
+        import bu_processor.pipeline.pdf_extractor as pdf_extractor_module
+        import io
+        pdf_extractor_module.Image = mock_pil_image
+        pdf_extractor_module.io = io
         
         # Mock fitz document für OCR
         mock_doc = Mock()
         mock_doc.__len__ = Mock(return_value=1)
+        mock_doc.__enter__ = Mock(return_value=mock_doc)  # Context manager support
+        mock_doc.__exit__ = Mock(return_value=None)
         
         mock_page = Mock()
         mock_pixmap = Mock()
@@ -649,15 +665,19 @@ class TestOCRIntegration:
         mocker.patch.object(Path, "exists", return_value=True)
         mocker.patch.object(Path, "stat", return_value=mocker.Mock(st_size=1024))
         
+        # Mock io.BytesIO for image processing
+        mock_bytesio = mocker.patch("io.BytesIO")
+        mock_bytesio.return_value = Mock()
+        
         extractor = EnhancedPDFExtractor()
         result = extractor._extract_with_ocr(sample_pdf_path)
         
         assert result.extraction_method == "pymupdf_ocr"
         assert result.metadata["ocr_applied"] is True
-        assert "OCR extrahierter Text" in result.text
+        assert "meaningful OCR extracted text" in result.text
         
         # Verify OCR calls
-        mock_pytesseract.image_to_string.assert_called_once()
+        mock_ocr.image_to_string.assert_called_once()
     
     def test_ocr_not_available(self, mocker, sample_pdf_path):
         """Test wenn OCR-Bibliotheken nicht verfügbar sind."""

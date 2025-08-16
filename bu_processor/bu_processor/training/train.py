@@ -25,7 +25,7 @@ def train(cfg: TrainingConfig):
         gradient_accumulation_steps=cfg.gradient_accumulation_steps,
         num_train_epochs=cfg.num_train_epochs,
         warmup_ratio=cfg.warmup_ratio,
-        evaluation_strategy=cfg.eval_strategy,
+        eval_strategy=cfg.eval_strategy,
         save_strategy=cfg.save_strategy,
         load_best_model_at_end=cfg.load_best_model_at_end,
         metric_for_best_model=cfg.metric_for_best_model,
