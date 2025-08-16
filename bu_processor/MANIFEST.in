@@ -1,0 +1,55 @@
+# MANIFEST.in for BU-Processor
+# Controls what gets included in the distribution package
+
+# Include important documentation and config files
+include README.md
+include LICENSE
+include requirements.txt
+include requirements-dev.txt
+include pyproject.toml
+include .env.example
+
+# Include package data
+recursive-include bu_processor *.py
+recursive-include bu_processor *.yaml
+recursive-include bu_processor *.yml
+recursive-include bu_processor *.json
+recursive-include bu_processor *.txt
+
+# Include docs
+recursive-include docs *
+
+# EXCLUDE TEST FILES FROM DISTRIBUTION
+# ====================================
+# Tests should not be shipped with the package
+prune bu_processor/bu_processor/**/test_*.py
+prune bu_processor/bu_processor/**/*_test.py  
+prune bu_processor/bu_processor/**/tests/
+recursive-exclude bu_processor/bu_processor test_*.py
+recursive-exclude bu_processor/bu_processor *_test.py
+recursive-exclude bu_processor/bu_processor conftest.py
+
+# Exclude development and build artifacts
+prune .git
+prune .pytest_cache
+prune __pycache__
+prune *.pyc
+prune .coverage
+prune htmlcov
+prune .tox
+prune build
+prune dist
+prune *.egg-info
+exclude .gitignore
+exclude .pre-commit-config.yaml
+exclude tox.ini
+exclude Makefile
+
+# Exclude temporary and cache files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude .coverage
