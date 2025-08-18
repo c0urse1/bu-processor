@@ -14,15 +14,16 @@ from .conftest import requires_tesseract
 from bu_processor.pipeline.pdf_extractor import (
     EnhancedPDFExtractor,
     ExtractedContent,
-    DocumentChunk,
     ChunkingStrategy,
     TextCleaner,
     PDFExtractionError,
     PDFCorruptedError,
     PDFTooLargeError,
     PDFPasswordProtectedError,
-    PDFTextExtractionError
+    PDFTextExtractionError,
+    NoExtractableTextError,
 )
+from bu_processor.models.chunk import DocumentChunk
 
 
 class TestEnhancedPDFExtractor:
@@ -701,8 +702,8 @@ class TestSemanticEnhancement:
         
         # Sample content mit Chunks
         chunks = [
-            DocumentChunk(id="1", text="Chunk 1", start_position=0, end_position=10),
-            DocumentChunk(id="2", text="Chunk 2", start_position=10, end_position=20)
+            DocumentChunk(chunk_id="1", text="Chunk 1", start_position=0, end_position=10),
+            DocumentChunk(chunk_id="2", text="Chunk 2", start_position=10, end_position=20)
         ]
         
         content = ExtractedContent(
@@ -794,7 +795,7 @@ def sample_document_chunks():
     """Sample DocumentChunks für Tests."""
     return [
         DocumentChunk(
-            id="chunk_1",
+            chunk_id="chunk_1",
             text="Erster Chunk mit wichtigem Inhalt.",
             start_position=0,
             end_position=35,
@@ -802,7 +803,7 @@ def sample_document_chunks():
             importance_score=0.8
         ),
         DocumentChunk(
-            id="chunk_2", 
+            chunk_id="chunk_2", 
             text="Zweiter Chunk mit anderen Informationen.",
             start_position=35,
             end_position=75,

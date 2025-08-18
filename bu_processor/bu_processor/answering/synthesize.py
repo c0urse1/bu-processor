@@ -14,6 +14,8 @@ def synthesize_answer(
     token_budget: int = 1200,
     min_confidence: float = 0.25,
     allow_conflicts: bool = False,
+    sentence_overlap: int = 1,
+    per_source_min_tokens: int = 80,
 ) -> AnswerResult:
     """
     Orchestrate the complete answer synthesis process with grounding checks.
@@ -25,6 +27,8 @@ def synthesize_answer(
         token_budget: Maximum tokens for context packing
         min_confidence: Minimum confidence threshold for answering
         allow_conflicts: Whether to proceed if numeric conflicts detected
+        sentence_overlap: Number of sentences to overlap between sources for continuity
+        per_source_min_tokens: Minimum tokens per source in quota allocation
         
     Returns:
         AnswerResult with answer text, citations, and metadata
@@ -37,7 +41,13 @@ def synthesize_answer(
 
     if weak or conflict_flag:
         # Still pack a tiny sources table to show provenance
-        ctx, sources = pack_context(hits[:2], token_budget=300, sentence_overlap=0, prefer_summary=True)
+        ctx, sources = pack_context(
+            hits[:2], 
+            token_budget=300, 
+            sentence_overlap=0, 
+            prefer_summary=True,
+            per_source_min_tokens=50
+        )
         msg = "Insufficient evidence to answer confidently."
         if conflict_flag:
             msg += " Sources appear to conflict."
@@ -59,12 +69,13 @@ def synthesize_answer(
             }
         )
 
-    # 2) Pack context with budget & anti-dup
+    # 2) Pack context with enhanced budget management and quota allocation
     context_str, sources_table = pack_context(
         hits, 
         token_budget=token_budget, 
-        sentence_overlap=1, 
-        prefer_summary=True
+        sentence_overlap=sentence_overlap, 
+        prefer_summary=True,
+        per_source_min_tokens=per_source_min_tokens
     )
 
     # 3) Delegate to answerer (LLM or rule-based)

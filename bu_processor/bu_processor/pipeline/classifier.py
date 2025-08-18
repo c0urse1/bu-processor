@@ -69,7 +69,8 @@ except ImportError:  # pragma: no cover - final fallback
     CONFIDENCE_THRESHOLD = 0.8
     USE_GPU = True
 
-from .pdf_extractor import EnhancedPDFExtractor, ExtractedContent, DocumentChunk, ChunkingStrategy
+from .pdf_extractor import EnhancedPDFExtractor, ExtractedContent, ChunkingStrategy
+from ..models.chunk import DocumentChunk
 
 # Strukturierter Logger für das gesamte Modul
 logger = get_logger(__name__)

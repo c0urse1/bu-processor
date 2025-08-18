@@ -41,5 +41,11 @@ class Settings(BaseSettings):
     OPENAI_ANSWERER_MODEL: str = "gpt-4o-mini"  # Updated to user's preferred model
     OPENAI_ANSWERER_MAX_TOKENS: int = 500
     OPENAI_ANSWER_MODEL: str = "gpt-4o-mini"  # Alternative name for compatibility
+    
+    # Semantic Chunking Settings
+    ENABLE_SEMANTIC_CHUNKING: bool = True
+    SEMANTIC_MAX_TOKENS: int = 480
+    SEMANTIC_SIM_THRESHOLD: float = 0.62
+    SEMANTIC_OVERLAP_SENTENCES: int = 1
 
 settings = Settings()

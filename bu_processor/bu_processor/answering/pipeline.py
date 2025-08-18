@@ -18,13 +18,17 @@ class AnswerPipeline:
         token_budget: int = 1200,
         min_confidence: float = 0.3,
         min_sources: int = 2,
-        prefer_summary: bool = True
+        prefer_summary: bool = True,
+        sentence_overlap: int = 1,
+        per_source_min_tokens: int = 80
     ):
         self.answerer = answerer
         self.token_budget = token_budget
         self.min_confidence = min_confidence
         self.min_sources = min_sources
         self.prefer_summary = prefer_summary
+        self.sentence_overlap = sentence_overlap
+        self.per_source_min_tokens = per_source_min_tokens
     
     def synthesize_answer(
         self, 
@@ -51,11 +55,13 @@ class AnswerPipeline:
                 trace={"method": "no_sources", "query": query}
             )
         
-        # Step 1: Pack context with budget management
+        # Step 1: Pack context with enhanced budget management and quota allocation
         packed_context, sources_table = pack_context(
             hits=hits,
             token_budget=self.token_budget,
-            prefer_summary=self.prefer_summary
+            sentence_overlap=self.sentence_overlap,
+            prefer_summary=self.prefer_summary,
+            per_source_min_tokens=self.per_source_min_tokens
         )
         
         # Step 2: Check grounding quality

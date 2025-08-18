@@ -9,10 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import fitz  # PyMuPDF
 import PyPDF2
+
+# Import the enhanced DocumentChunk model
+from ..models.chunk import DocumentChunk, create_semantic_chunk, create_paragraph_chunk
 
 # Meaningful text validation constants
 MIN_MEANINGFUL_CHARS = 10
@@ -75,9 +78,15 @@ try:
     from ..semantic.testing import FakeDeterministicEmbeddings
     from ..semantic.chunker import semantic_segment_sentences
     from ..semantic.tokens import approx_token_count
+    from ..pipeline.chunk_entry import chunk_document_pages
+    from ..pipeline.upsert_pipeline import embed_and_index_chunks, convert_chunks_to_dict
     REAL_SEMANTIC_CHUNKING_AVAILABLE = True
 except ImportError:
     REAL_SEMANTIC_CHUNKING_AVAILABLE = False
+
+# Import for UUID generation and timestamps
+from uuid import uuid4
+from datetime import datetime, timezone
 
 # Config import mit Fallback und Logger
 try:
@@ -158,19 +167,6 @@ class NoExtractableTextError(PDFExtractionError):
     pass
 
 @dataclass
-class DocumentChunk:
-    """Einzelner Text-Chunk mit Metadaten"""
-    id: str
-    text: str
-    start_position: int
-    end_position: int
-    page_number: Optional[int] = None
-    heading_text: str = ""
-    chunk_type: str = "paragraph"
-    importance_score: float = 1.0
-    metadata: Dict = field(default_factory=dict)
-
-@dataclass
 class ExtractedContent:
     """Container für extrahierte PDF-Inhalte mit Chunking-Support"""
     text: str
@@ -186,6 +182,8 @@ class ExtractedContent:
     # Performance metrics
     extraction_time: float = 0.0
     text_cleaned: bool = False
+    # Page-level information for semantic chunking
+    pages: List[Tuple[int, str]] = field(default_factory=list)
 
 class ChunkingStrategy(Enum):
     """Verfügbare Chunking-Strategien.
@@ -491,7 +489,8 @@ class EnhancedPDFExtractor:
                 chunking_strategy,
                 max_chunk_size,
                 overlap_size,
-                base_content.page_count
+                base_content.page_count,
+                pages=getattr(base_content, 'pages', None)
             )
             
             # Enhanced Content mit Chunks erstellen
@@ -503,7 +502,8 @@ class EnhancedPDFExtractor:
                 extraction_method=base_content.extraction_method,
                 chunks=chunks,
                 chunking_enabled=True,
-                chunking_method=chunking_strategy.value
+                chunking_method=chunking_strategy.value,
+                pages=getattr(base_content, 'pages', None)
             )
             
             # Semantic Clustering falls verfügbar
@@ -518,6 +518,148 @@ class EnhancedPDFExtractor:
         else:
             # Rückgabe ohne Chunking (Kompatibilität)
             return base_content
+
+    def extract_and_upsert_pdf(
+        self,
+        pdf_path: Union[str, Path],
+        chunking_strategy: ChunkingStrategy = ChunkingStrategy.SEMANTIC,
+        title: Optional[str] = None,
+        tenant: Optional[str] = None,
+        embedder = None,
+        index = None,
+        store = None,
+        namespace: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        B1) COMPLETE IMPLEMENTATION: Extract PDF with stable doc_id and proper metadata flow.
+        
+        This implements the pattern:
+        1. Generate doc_id BEFORE chunking
+        2. Use semantic chunking with proper page/section metadata 
+        3. Upsert document with stable doc_id
+        4. Return all metadata for downstream use
+        
+        Args:
+            pdf_path: Path to PDF file
+            chunking_strategy: Chunking method (SEMANTIC recommended)
+            title: Document title (defaults to filename)
+            tenant: Tenant identifier for multi-tenancy
+            embedder: Embeddings backend
+            index: Vector index
+            store: Document store
+            namespace: Vector namespace
+            
+        Returns:
+            Dict with doc_id, chunk_ids, metadata, and extraction info
+        """
+        
+        # 1) GENERATE STABLE DOC_ID FIRST
+        doc_id = str(uuid4())
+        pdf_path = Path(pdf_path)
+        
+        # B3) Generate ingestion timestamp
+        ingested_at = datetime.now(timezone.utc).isoformat()
+        
+        # Default title to filename if not provided
+        if title is None:
+            title = pdf_path.stem
+            
+        logger.info(f"Starting B1 PDF extraction with stable doc_id: {doc_id}, ingested_at: {ingested_at}, file: {pdf_path}")
+        
+        try:
+            # 2) EXTRACT WITH PAGE DATA
+            extracted_content = self.extract_text_from_pdf(
+                pdf_path,
+                chunking_strategy=chunking_strategy,
+                max_chunk_size=480,  # Use semantic defaults
+                overlap_size=1
+            )
+            
+            if not extracted_content.chunks:
+                raise ValueError("No chunks were generated from PDF")
+                
+            logger.info(f"Extracted {len(extracted_content.chunks)} chunks with {extracted_content.chunking_method} chunking")
+            
+            # 3) ENHANCE CHUNKS WITH METADATA
+            enhanced_chunks = []
+            for chunk in extracted_content.chunks:
+                # Ensure doc_id is set on each chunk
+                chunk.doc_id = doc_id
+                
+                # Add source metadata including timestamps
+                if not chunk.meta:
+                    chunk.meta = {}
+                chunk.meta.update({
+                    "source_url": str(pdf_path),
+                    "tenant": tenant,
+                    "extraction_method": extracted_content.extraction_method,
+                    "pdf_page_count": extracted_content.page_count,
+                    # B3) Add ingestion timestamp to each chunk
+                    "ingested_at": ingested_at
+                })
+                
+                enhanced_chunks.append(chunk)
+            
+            # 4) CONVERT TO DICT FORMAT FOR UPSERT
+            if REAL_SEMANTIC_CHUNKING_AVAILABLE:
+                chunk_dicts = convert_chunks_to_dict(enhanced_chunks)
+            else:
+                # Fallback conversion
+                chunk_dicts = []
+                for chunk in enhanced_chunks:
+                    chunk_dicts.append({
+                        "text": chunk.text,
+                        "page": chunk.page_start,
+                        "section": chunk.section,
+                        "meta": chunk.meta or {}
+                    })
+            
+            # 5) UPSERT WITH STABLE DOC_ID (if components provided)
+            result = {
+                "doc_id": doc_id,
+                "title": title,
+                "source": str(pdf_path),
+                "tenant": tenant,
+                "chunks_count": len(enhanced_chunks),
+                "chunking_method": extracted_content.chunking_method,
+                "extraction_method": extracted_content.extraction_method,
+                "page_count": extracted_content.page_count,
+                "text_length": len(extracted_content.text),
+                # B3) Include ingestion timestamp in result
+                "ingested_at": ingested_at
+            }
+            
+            if embedder and index and store:
+                # Full upsert pipeline with timestamps
+                upsert_result = embed_and_index_chunks(
+                    doc_title=title,
+                    doc_source=str(pdf_path),
+                    doc_meta={
+                        "tenant": tenant, 
+                        "extraction_method": extracted_content.extraction_method,
+                        # B3) Document-level timestamp will be added by upsert_pipeline
+                    },
+                    chunks=chunk_dicts,
+                    embedder=embedder,
+                    index=index,
+                    store=store,
+                    namespace=namespace,
+                    doc_id=doc_id  # STABLE DOC_ID!
+                )
+                
+                result.update(upsert_result)
+                logger.info(f"B1 pipeline completed - doc_id: {doc_id}, chunks stored: {len(upsert_result['chunk_ids'])}")
+            else:
+                # Return chunks without storage (for testing/analysis)
+                result["chunks"] = enhanced_chunks
+                result["chunk_dicts"] = chunk_dicts
+                logger.info(f"B1 extraction completed without storage - doc_id: {doc_id}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"B1 PDF extraction failed for {pdf_path}: {e}", exc_info=True)
+            raise
     
     def _extract_base_content(self, pdf_path: Path) -> ExtractedContent:
         """Versucht Text-Extraktion mit Standard-Methoden, nutzt OCR als finalen Fallback."""
@@ -569,7 +711,8 @@ class EnhancedPDFExtractor:
         strategy: ChunkingStrategy, 
         max_chunk_size: int,
         overlap_size: int,
-        page_count: int
+        page_count: int,
+        pages: List[Tuple[int, str]] = None
     ) -> List[DocumentChunk]:
         """
         Wendet gewählte Chunking-Strategie an.
@@ -580,46 +723,28 @@ class EnhancedPDFExtractor:
         # Use unified chunking for semantic strategies
         if strategy in [ChunkingStrategy.SEMANTIC, ChunkingStrategy.HYBRID, ChunkingStrategy.BALANCED]:
             try:
-                from ..chunking import chunk_document
+                logger.debug(f"Attempting semantic chunking - REAL_SEMANTIC_CHUNKING_AVAILABLE: {REAL_SEMANTIC_CHUNKING_AVAILABLE}, pages available: {pages is not None}, pages count: {len(pages) if pages else 0}")
                 
-                # Map strategy to semantic settings
-                enable_semantic = strategy != ChunkingStrategy.SIMPLE
-                
-                # Use unified chunking
-                chunk_texts = chunk_document(
-                    text=text,
-                    enable_semantic=enable_semantic,
-                    max_tokens=max_chunk_size,
-                    overlap_sentences=overlap_size
-                )
-                
-                # Convert to DocumentChunk objects
-                chunks = []
-                start_pos = 0
-                for i, chunk_text in enumerate(chunk_texts):
-                    end_pos = start_pos + len(chunk_text)
-                    
-                    chunk = DocumentChunk(
-                        id=f"unified_chunk_{i}",
-                        text=chunk_text,
-                        start_position=start_pos,
-                        end_position=end_pos,
-                        chunk_type=strategy.value,
-                        importance_score=1.0,
-                        metadata={
-                            'unified_chunking': True,
-                            'strategy': strategy.value,
-                            'page_count': page_count
-                        }
+                if REAL_SEMANTIC_CHUNKING_AVAILABLE and pages:
+                    # Use the new unified chunking with page data
+                    logger.info(f"Using unified semantic chunking with {len(pages)} pages")
+                    chunks = chunk_document_pages(
+                        pages=pages,
+                        doc_id=f"pdf_doc_{hash(text) % 10000}",
+                        source_url=None,
+                        tenant=None,
+                        prefer_semantic=True
                     )
-                    chunks.append(chunk)
-                    start_pos = end_pos
-                
-                logger.info(f"Unified chunking completed - {len(chunks)} chunks created with strategy {strategy.value}")
-                return chunks
+                    
+                    logger.info(f"Unified semantic chunking completed - {len(chunks)} chunks created with strategy {strategy.value}")
+                    return chunks
+                else:
+                    logger.warning(f"Pages data not available or semantic chunking not available, falling back to legacy - REAL_SEMANTIC_CHUNKING_AVAILABLE: {REAL_SEMANTIC_CHUNKING_AVAILABLE}, pages: {pages is not None}")
                 
             except Exception as e:
                 logger.warning(f"Unified chunking failed, falling back to legacy method: {e}")
+                import traceback
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
                 # Fall back to legacy method for backward compatibility
                 pass
         
@@ -658,7 +783,7 @@ class EnhancedPDFExtractor:
                 # Aktuellen Chunk abschließen
                 chunk_text = " ".join(current_chunk_sentences)
                 chunks.append(DocumentChunk(
-                    id=f"chunk_{chunk_id_counter}",
+                    chunk_id=f"chunk_{chunk_id_counter}",
                     text=chunk_text,
                     start_position=0,  # Positionen müssten neu berechnet werden, hier vereinfacht
                     end_position=len(chunk_text),
@@ -686,7 +811,7 @@ class EnhancedPDFExtractor:
         if current_chunk_sentences:
             chunk_text = " ".join(current_chunk_sentences)
             chunks.append(DocumentChunk(
-                id=f"chunk_{chunk_id_counter}",
+                chunk_id=f"chunk_{chunk_id_counter}",
                 text=chunk_text,
                 start_position=0,
                 end_position=len(chunk_text),
@@ -746,13 +871,13 @@ class EnhancedPDFExtractor:
                 end_pos = start_pos + len(chunk_text)
                 
                 chunk = DocumentChunk(
-                    id=f"deprecated_chunk_{i}",
+                    chunk_id=f"deprecated_chunk_{i}",
                     text=chunk_text,
                     start_position=start_pos,
                     end_position=end_pos,
                     chunk_type="semantic",  # Keep original type for compatibility
                     importance_score=1.0,
-                    metadata={
+                    meta={
                         'deprecated_method': True,
                         'migrate_to': 'bu_processor.chunking.chunk_document'
                     }
@@ -776,7 +901,7 @@ class EnhancedPDFExtractor:
         
         # Placeholder für semantische Verfeinerung
         for chunk in chunks:
-            chunk.metadata['semantic_refined'] = True
+            chunk.meta['semantic_refined'] = True
             chunk.chunk_type = "hybrid_chunk"
             # Erhöhe Importance Score für größere Chunks (potentiell wichtiger)
             if len(chunk.text) > 500:
@@ -792,6 +917,7 @@ class EnhancedPDFExtractor:
         
         try:
             text_parts = []
+            pages = []
             page_count = 0
             with fitz.open(str(pdf_path)) as doc:
                 page_count = len(doc)
@@ -804,6 +930,7 @@ class EnhancedPDFExtractor:
                     # OCR auf das Bild anwenden
                     page_text = ocr.image_to_string(img, lang='deu')  # 'deu' für Deutsch
                     text_parts.append(page_text)
+                    pages.append((page_num + 1, page_text))  # 1-indexed page numbers
 
             full_text = "\n\n".join(text_parts).strip()
             
@@ -819,7 +946,8 @@ class EnhancedPDFExtractor:
                 page_count=page_count,
                 file_path=str(pdf_path),
                 metadata={"ocr_applied": True},
-                extraction_method="pymupdf_ocr"
+                extraction_method="pymupdf_ocr",
+                pages=pages
             )
         except NoExtractableTextError as e:
             # Convert to PDFTextExtractionError at public boundary
@@ -841,7 +969,7 @@ class EnhancedPDFExtractor:
             
             # Für jetzt: Chunk-Metadaten erweitern
             for i, chunk in enumerate(content.chunks):
-                chunk.metadata['semantic_analysis'] = {
+                chunk.meta['semantic_analysis'] = {
                     'processed': True,
                     'enhancement_version': '1.0',
                     'chunk_index': i,
@@ -896,7 +1024,7 @@ class EnhancedPDFExtractor:
                 if doc.needs_pass:
                     raise PDFPasswordProtectedError(f"PDF requires password: {pdf_path}")
                 
-                text = self._extract_text_from_fitz_doc(doc, pdf_path)
+                text, pages = self._extract_text_and_pages_from_fitz_doc(doc, pdf_path)
                 
                 # Get page count safely for mocks and real objects
                 page_count = 1  # Default fallback
@@ -926,7 +1054,8 @@ class EnhancedPDFExtractor:
                     page_count=page_count,
                     file_path=str(pdf_path),
                     metadata=metadata,
-                    extraction_method="pymupdf"
+                    extraction_method="pymupdf",
+                    pages=pages
                 )
             finally:
                 try:
@@ -960,7 +1089,13 @@ class EnhancedPDFExtractor:
     
     def _extract_text_from_fitz_doc(self, doc, pdf_path: Path) -> str:
         """Extrahiert Text aus einem geöffneten fitz-Dokument"""
+        text, _ = self._extract_text_and_pages_from_fitz_doc(doc, pdf_path)
+        return text
+    
+    def _extract_text_and_pages_from_fitz_doc(self, doc, pdf_path: Path) -> Tuple[str, List[Tuple[int, str]]]:
+        """Extrahiert Text und Page-Informationen aus einem geöffneten fitz-Dokument"""
         texts = []
+        pages = []
         try:
             # Prefer a safe page iteration that works with real objects & mocks
             # Try different approaches to get page count
@@ -976,7 +1111,9 @@ class EnhancedPDFExtractor:
             
             for page_index in range(page_count):
                 page = doc[page_index]
-                texts.append(page.get_text("text") or "")
+                page_text = page.get_text("text") or ""
+                texts.append(page_text)
+                pages.append((page_index + 1, page_text))  # 1-based page numbering
         except Exception as e:
             # Let upper layer wrap into PDFTextExtractionError
             raise NoExtractableTextError(str(e)) from e
@@ -985,7 +1122,7 @@ class EnhancedPDFExtractor:
         if not _is_meaningful_text(combined):
             raise NoExtractableTextError("no text or not meaningful")
 
-        return combined
+        return combined, pages
     
     def _extract_pages_parallel(self, doc, page_count: int) -> str:
         """Parallele Seiten-Extraktion für große PDFs"""
@@ -1030,6 +1167,27 @@ class EnhancedPDFExtractor:
         
         return "\n".join(text_parts)
     
+    def _extract_text_and_pages_from_pypdf2(self, pdf_reader: PyPDF2.PdfReader) -> Tuple[str, List[Tuple[int, str]]]:
+        """Extract combined text and page-level data from PyPDF2 reader"""
+        page_count = len(pdf_reader.pages)
+        text_parts = []
+        pages = []
+        
+        for page_num in range(page_count):
+            try:
+                page = pdf_reader.pages[page_num]
+                page_text = page.extract_text()
+                page_text = page_text if page_text else ""
+                text_parts.append(page_text)
+                pages.append((page_num + 1, page_text))  # 1-indexed page numbers
+            except Exception as e:
+                logger.warning(f"Failed to extract page {page_num} with PyPDF2: {e}")
+                text_parts.append("")
+                pages.append((page_num + 1, ""))  # Keep page order
+        
+        combined_text = "\n".join(text_parts).strip()
+        return combined_text, pages
+    
     def _extract_with_pypdf2(self, pdf_path: Path) -> ExtractedContent:
         """Text-Extraktion mit PyPDF2 (Fallback)"""
         try:
@@ -1056,18 +1214,8 @@ class EnhancedPDFExtractor:
                     except Exception as e:
                         logger.warning(f"Failed to extract metadata with PyPDF2: {e}")
                 
-                # Extract text from all pages
-                text_parts = []
-                for page_num in range(page_count):
-                    try:
-                        page = pdf_reader.pages[page_num]
-                        page_text = page.extract_text()
-                        text_parts.append(page_text if page_text else "")
-                    except Exception as e:
-                        logger.warning(f"Failed to extract page {page_num} with PyPDF2: {e}")
-                        text_parts.append("")  # Keep page order
-                
-                combined_text = "\n".join(text_parts).strip()
+                # Extract text and pages
+                combined_text, pages = self._extract_text_and_pages_from_pypdf2(pdf_reader)
                 
                 # Check for meaningful text
                 if not _is_meaningful_text(combined_text):
@@ -1081,7 +1229,8 @@ class EnhancedPDFExtractor:
                     page_count=page_count,
                     file_path=str(pdf_path),
                     metadata=metadata,
-                    extraction_method="pypdf2"
+                    extraction_method="pypdf2",
+                    pages=pages
                 )
                 
         except PyPDF2.errors.PdfReadError as e:

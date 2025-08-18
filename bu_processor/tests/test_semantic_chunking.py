@@ -234,7 +234,7 @@ def test_pdf_extractor_semantic_chunking_integration():
         chunks = extractor._semantic_chunking(test_text, max_chunk_size=100, overlap_size=20)
         
         # If it succeeds with our fake embedder, great!
-        from bu_processor.pipeline.pdf_extractor import DocumentChunk
+        from bu_processor.models.chunk import DocumentChunk
         if chunks:
             assert all(isinstance(chunk, DocumentChunk) for chunk in chunks)
             assert all(chunk.text.strip() for chunk in chunks)

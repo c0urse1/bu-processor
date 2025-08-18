@@ -1267,7 +1267,7 @@ class MockFactory:
         chunk_size: int = 100
     ):
         """Erstellt Mock-Document-Chunks."""
-        from bu_processor.pipeline.pdf_extractor import DocumentChunk
+        from bu_processor.models.chunk import DocumentChunk
         
         chunks = []
         words = text.split()
@@ -1277,7 +1277,7 @@ class MockFactory:
             chunk_text = " ".join(chunk_words)
             
             chunk = DocumentChunk(
-                id=f"chunk_{i//10}",
+                chunk_id=f"chunk_{i//10}",
                 text=chunk_text,
                 start_position=i * 10,
                 end_position=(i * 10) + len(chunk_text),

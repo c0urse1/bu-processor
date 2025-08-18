@@ -87,7 +87,8 @@ except ImportError:
 
 # Try to import other types
 try:
-    from .pdf_extractor import ExtractedContent, DocumentChunk
+    from .pdf_extractor import ExtractedContent
+    from ..models.chunk import DocumentChunk
 except ImportError:
     ExtractedContent = None  # type: ignore
     DocumentChunk = None  # type: ignore
