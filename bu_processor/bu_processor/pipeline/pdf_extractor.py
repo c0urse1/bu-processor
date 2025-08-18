@@ -69,6 +69,16 @@ try:
 except ImportError:
     SEMANTIC_CHUNKING_AVAILABLE = False
 
+# Real semantic chunking imports
+try:
+    from ..semantic.embeddings import SbertEmbeddings
+    from ..semantic.testing import FakeDeterministicEmbeddings
+    from ..semantic.chunker import semantic_segment_sentences
+    from ..semantic.tokens import approx_token_count
+    REAL_SEMANTIC_CHUNKING_AVAILABLE = True
+except ImportError:
+    REAL_SEMANTIC_CHUNKING_AVAILABLE = False
+
 # Config import mit Fallback und Logger
 try:
     from ..core.config import (
@@ -76,7 +86,7 @@ try:
         PDF_TEXT_CLEANUP, MIN_EXTRACTED_TEXT_LENGTH, MAX_BATCH_PDF_COUNT,
         PDF_CACHE_DIR, ENABLE_PDF_CACHE, SUPPORTED_PDF_EXTENSIONS,
         PDF_FALLBACK_CHAIN, EXTRACT_PDF_METADATA, NORMALIZE_WHITESPACE,
-        AUTO_DETECT_LANGUAGE, LOG_LEVEL
+        AUTO_DETECT_LANGUAGE, LOG_LEVEL, AppSettings, get_config
     )
     # Logger Setup aus config
     import structlog
@@ -85,6 +95,12 @@ try:
     # Configure structlog with proper log level
     logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
     logger = structlog.get_logger("pipeline.pdf_extractor")
+    
+    # Get settings for semantic chunking
+    try:
+        settings = AppSettings()
+    except Exception:
+        settings = None
     
 except ImportError:
     # Fallback values und basic logging
@@ -102,6 +118,7 @@ except ImportError:
     NORMALIZE_WHITESPACE = True
     AUTO_DETECT_LANGUAGE = False
     LOG_LEVEL = "INFO"
+    settings = None
     
     # Basic logger fallback
     import logging
@@ -554,18 +571,70 @@ class EnhancedPDFExtractor:
         overlap_size: int,
         page_count: int
     ) -> List[DocumentChunk]:
-        """Wendet gewählte Chunking-Strategie an"""
+        """
+        Wendet gewählte Chunking-Strategie an.
         
+        Now uses unified chunking entry point for better consistency.
+        """
+        
+        # Use unified chunking for semantic strategies
+        if strategy in [ChunkingStrategy.SEMANTIC, ChunkingStrategy.HYBRID, ChunkingStrategy.BALANCED]:
+            try:
+                from ..chunking import chunk_document
+                
+                # Map strategy to semantic settings
+                enable_semantic = strategy != ChunkingStrategy.SIMPLE
+                
+                # Use unified chunking
+                chunk_texts = chunk_document(
+                    text=text,
+                    enable_semantic=enable_semantic,
+                    max_tokens=max_chunk_size,
+                    overlap_sentences=overlap_size
+                )
+                
+                # Convert to DocumentChunk objects
+                chunks = []
+                start_pos = 0
+                for i, chunk_text in enumerate(chunk_texts):
+                    end_pos = start_pos + len(chunk_text)
+                    
+                    chunk = DocumentChunk(
+                        id=f"unified_chunk_{i}",
+                        text=chunk_text,
+                        start_position=start_pos,
+                        end_position=end_pos,
+                        chunk_type=strategy.value,
+                        importance_score=1.0,
+                        metadata={
+                            'unified_chunking': True,
+                            'strategy': strategy.value,
+                            'page_count': page_count
+                        }
+                    )
+                    chunks.append(chunk)
+                    start_pos = end_pos
+                
+                logger.info(f"Unified chunking completed - {len(chunks)} chunks created with strategy {strategy.value}")
+                return chunks
+                
+            except Exception as e:
+                logger.warning(f"Unified chunking failed, falling back to legacy method: {e}")
+                # Fall back to legacy method for backward compatibility
+                pass
+        
+        # Legacy chunking for simple strategy or fallback
         if strategy == ChunkingStrategy.SIMPLE:
             return self._simple_chunking(text, max_chunk_size, overlap_size)
         elif strategy == ChunkingStrategy.SEMANTIC:
-            return self._semantic_chunking(text, max_chunk_size)
+            return self._semantic_chunking(text, max_chunk_size, overlap_size)
         elif strategy == ChunkingStrategy.HYBRID:
             # Kombination: Erst einfach, dann semantisch verfeinern
             simple_chunks = self._simple_chunking(text, max_chunk_size, overlap_size)
             return self._refine_chunks_semantically(simple_chunks)
         else:
-            return []
+            # Default to simple chunking
+            return self._simple_chunking(text, max_chunk_size, overlap_size)
     
     # ### VERBESSERUNG 3: SATZ-BASIERTES CHUNKING ###
     def _simple_chunking(self, text: str, max_chunk_size: int, overlap_size: int) -> List[DocumentChunk]:
@@ -627,30 +696,76 @@ class EnhancedPDFExtractor:
         logger.info(f"Sentence-based chunking completed - {len(chunks)} chunks created")
         return chunks
     
-    def _semantic_chunking(self, text: str, max_chunk_size: int) -> List[DocumentChunk]:
-        """Semantisches Chunking mit KI-Unterstützung"""
-        if not self.semantic_enhancer:
-            logger.warning("Semantic chunking requested but enhancer not available, falling back to simple")
-            chunks = self._simple_chunking(text, max_chunk_size, 0)
-            # Setze semantische Attribute für Fallback
-            for chunk in chunks:
-                chunk.metadata['semantic_ready'] = True
-                chunk.chunk_type = "semantic_paragraph"
+    def _semantic_chunking(self, text: str, max_chunk_size: int, overlap_size: int = 0) -> List[DocumentChunk]:
+        """
+        @deprecated: Use bu_processor.chunking.chunk_document() instead.
+        
+        This method is deprecated and will be removed in a future version.
+        It now delegates to the unified chunking entry point.
+        """
+        import warnings
+        warnings.warn(
+            "_semantic_chunking is deprecated. Use bu_processor.chunking.chunk_document() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        logger.warning("Using deprecated _semantic_chunking method. Migrate to bu_processor.chunking.chunk_document()")
+        
+        # Delegate to new unified chunking approach
+        try:
+            from ..chunking import chunk_document
+            
+            # Get chunking parameters from settings or use defaults
+            try:
+                config = get_config()
+                max_tokens = config.semantic.semantic_max_tokens
+                sim_threshold = config.semantic.semantic_sim_threshold
+                overlap_sentences = config.semantic.semantic_overlap_sentences
+                model_name = config.semantic.semantic_model_name
+            except Exception:
+                max_tokens = max_chunk_size
+                sim_threshold = 0.62
+                overlap_sentences = overlap_size
+                model_name = "sentence-transformers/all-MiniLM-L6-v2"
+            
+            # Use unified chunking
+            chunk_texts = chunk_document(
+                text=text,
+                enable_semantic=None,  # Use config setting
+                max_tokens=max_tokens,
+                sim_threshold=sim_threshold,
+                overlap_sentences=overlap_sentences,
+                model_name=model_name
+            )
+            
+            # Convert to DocumentChunk objects for backward compatibility
+            chunks = []
+            start_pos = 0
+            for i, chunk_text in enumerate(chunk_texts):
+                end_pos = start_pos + len(chunk_text)
+                
+                chunk = DocumentChunk(
+                    id=f"deprecated_chunk_{i}",
+                    text=chunk_text,
+                    start_position=start_pos,
+                    end_position=end_pos,
+                    chunk_type="semantic",  # Keep original type for compatibility
+                    importance_score=1.0,
+                    metadata={
+                        'deprecated_method': True,
+                        'migrate_to': 'bu_processor.chunking.chunk_document'
+                    }
+                )
+                chunks.append(chunk)
+                start_pos = end_pos
+            
             return chunks
-        
-        # TODO: Vollständige Integration mit semantic_chunking_enhancement
-        # Für jetzt: Fallback zu simple chunking mit verbesserter Logik
-        logger.info("Semantic chunking using enhanced simple strategy")
-        
-        # Verwende kleinere Chunks für semantische Analyse
-        chunks = self._simple_chunking(text, max_chunk_size // 2, 50)
-        
-        # Erweitere Chunks mit semantischen Informationen
-        for chunk in chunks:
-            chunk.metadata['semantic_ready'] = True
-            chunk.chunk_type = "semantic_paragraph"
-        
-        return chunks
+            
+        except Exception as e:
+            logger.error(f"Unified chunking failed in deprecated method: {e}")
+            # Final fallback to simple chunking
+            return self._simple_chunking(text, max_chunk_size, overlap_size)
     
     def _refine_chunks_semantically(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
         """Verfeinert bestehende Chunks semantisch"""

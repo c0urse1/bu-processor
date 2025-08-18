@@ -422,7 +422,42 @@ class DeduplicationConfig(BaseSettings):
     )
 
 class SemanticConfig(BaseSettings):
-    """Semantische Clustering Konfiguration"""
+    """Semantische Clustering und Chunking Konfiguration"""
+    
+    # Semantic Chunking Settings
+    enable_semantic_chunking: bool = Field(
+        default=True,
+        description="Aktiviert semantisches Chunking (False = einfaches Chunking)"
+    )
+    semantic_model_name: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="SentenceTransformer-Modell für semantisches Chunking"
+    )
+    semantic_sim_threshold: float = Field(
+        default=0.62,
+        ge=0.0,
+        le=1.0,
+        description="Kosinus-Ähnlichkeitsschwelle für semantisches Chunking"
+    )
+    semantic_max_tokens: int = Field(
+        default=480,
+        gt=0,
+        description="Maximale Token-Anzahl pro semantischem Chunk"
+    )
+    semantic_overlap_sentences: int = Field(
+        default=1,
+        ge=0,
+        description="Anzahl überlappender Sätze zwischen Chunks"
+    )
+    semantic_use_kmeans: bool = Field(
+        default=False,
+        description="Verwende K-Means anstatt greedy clustering"
+    )
+    semantic_k: int = Field(
+        default=8,
+        gt=0,
+        description="Anzahl Cluster für K-Means (falls aktiviert)"
+    )
     
     # Model Settings
     models: Dict[str, str] = Field(
@@ -499,6 +534,67 @@ class SemanticConfig(BaseSettings):
             'top_similar_chunks': 3
         },
         description="Ähnlichkeits-Schwellwerte und Parameter"
+    )
+    
+    # Chunking Settings
+    chunking: Dict[str, Any] = Field(
+        default={
+            'max_chunk_size': 1000,
+            'overlap_size': 100,
+            'min_chunk_size': 100,
+            'similarity_threshold': 0.7,
+            'merge_similar_chunks': True
+        },
+        description="Chunk-Größe und Überlappungseinstellungen"
+    )
+    
+    # Embedder Configuration
+    embedder: Dict[str, Any] = Field(
+        default={
+            'use_sentence_transformers': True,  # False to use fake embedder for tests
+            'model_name': 'paraphrase-multilingual-MiniLM-L12-v2',
+            'cache_embeddings': True,
+            'device': 'auto'  # 'auto', 'cpu', or 'cuda'
+        },
+        description="Embedder-Konfiguration für semantisches Chunking"
+    )
+    
+    # Real Semantic Chunking Settings (Step-by-step implementation)
+    enable_semantic_chunking: bool = Field(
+        default=True,
+        description="Enable real semantic chunking with embeddings"
+    )
+    semantic_model_name: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="Sentence transformer model for semantic chunking"
+    )
+    semantic_sim_threshold: float = Field(
+        default=0.62,
+        ge=0.0,
+        le=1.0,
+        description="Cosine similarity threshold to running centroid"
+    )
+    semantic_max_tokens: int = Field(
+        default=480,
+        ge=50,
+        le=2000,
+        description="Rough token cap per chunk"
+    )
+    semantic_overlap_sentences: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Number of sentences to overlap between chunks"
+    )
+    semantic_use_kmeans: bool = Field(
+        default=False,
+        description="Use KMeans clustering instead of greedy approach"
+    )
+    semantic_k: int = Field(
+        default=8,
+        ge=2,
+        le=50,
+        description="Number of clusters for KMeans (if enabled)"
     )
     
     # Enable/Disable Flag

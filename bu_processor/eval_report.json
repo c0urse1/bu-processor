@@ -1,0 +1,30 @@
+{
+  "rows": [
+    {
+      "query": "Which insurance covers financial loss from negligence?",
+      "hit@1": 0.0,
+      "hit@3": 0.0,
+      "hit@5": 0.0,
+      "mrr": 0.0,
+      "citation_acc": 1.0,
+      "faithfulness": 0.0
+    },
+    {
+      "query": "What optimizes capital structure for companies?",
+      "hit@1": 0.0,
+      "hit@3": 0.0,
+      "hit@5": 0.0,
+      "mrr": 0.0,
+      "citation_acc": 1.0,
+      "faithfulness": 0.0
+    }
+  ],
+  "aggregate": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr": 0.0,
+    "faithfulness": 0.0,
+    "citation_acc": 1.0
+  }
+}
