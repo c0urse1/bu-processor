@@ -38,6 +38,8 @@ try:
     from ..core.config import get_config
     from ..pipeline.classifier import RealMLClassifier, extract_text_from_pdf
     from ..pipeline.pdf_extractor import ChunkingStrategy, ContentType
+    from ..factories import make_embedder, make_index, make_store
+    from ..ingest import embed_and_index_chunks, extract_and_chunk_pdf
     import structlog
     logger = structlog.get_logger("api.main")
 except ImportError as e:
@@ -50,13 +52,54 @@ except ImportError as e:
         from core.config import get_config
         from pipeline.classifier import RealMLClassifier, extract_text_from_pdf
         from pipeline.pdf_extractor import ChunkingStrategy, ContentType
+        from factories import make_embedder, make_index, make_store
+        from ingest import embed_and_index_chunks, extract_and_chunk_pdf
         import structlog
         logger = structlog.get_logger("api.main")
     except ImportError:
-        # Final fallback
+        # Final fallback - mock everything
         import logging
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger("api.main")
+        
+        # Mock classes
+        class RealMLClassifier:
+            def classify_pdf(self, *args, **kwargs):
+                return {"error": "Classifier not available in fallback mode"}
+            def classify_text(self, *args, **kwargs):
+                return {"error": "Classifier not available in fallback mode"}
+            def get_health_status(self):
+                return {"status": "unavailable"}
+            def get_model_info(self):
+                return {"model": "mock"}
+            def get_available_labels(self):
+                return []
+        
+        def extract_text_from_pdf(*args, **kwargs):
+            raise NotImplementedError("PDF extraction not available in fallback mode")
+        
+        def make_embedder():
+            raise NotImplementedError("Embedder not available in fallback mode")
+        
+        def make_index():
+            raise NotImplementedError("Index not available in fallback mode")
+        
+        def make_store():
+            raise NotImplementedError("Store not available in fallback mode")
+        
+        def embed_and_index_chunks(*args, **kwargs):
+            raise NotImplementedError("Embedding not available in fallback mode")
+        
+        def extract_and_chunk_pdf(*args, **kwargs):
+            raise NotImplementedError("PDF chunking not available in fallback mode")
+        
+        class ChunkingStrategy:
+            SEMANTIC = "semantic"
+            FIXED = "fixed"
+        
+        class ContentType:
+            TEXT = "text"
+            PDF = "pdf"
         
         # Mock config für Fallback
         class MockConfig:
@@ -137,6 +180,55 @@ class ErrorResponse(BaseModel):
     detail: Optional[str] = Field(None, description="Additional error details")
     request_id: Optional[str] = Field(None, description="Request identifier")
 
+class ProcessPDFResponse(BaseModel):
+    """Response model für kombinierte PDF-Verarbeitung (Klassifikation + Indexierung)"""
+    filename: str = Field(..., description="Original filename")
+    classification: Dict = Field(..., description="Classification results")
+    ingest: Dict = Field(..., description="Indexing/storage results")
+    processing_time: float = Field(..., description="Total processing time in seconds")
+    doc_id: Optional[str] = Field(None, description="Document ID in storage")
+    chunks_created: Optional[int] = Field(None, description="Number of chunks created")
+
+# ============================================================================
+# AUTHENTICATION HELPERS
+# ============================================================================
+
+def validate_api_key(provided_key: str):
+    """Validate API key for authentication"""
+    try:
+        expected_key = getattr(config.api, 'api_key', None) if hasattr(config, 'api') else None
+        
+        # If no API key is configured, allow access (development mode)
+        if not expected_key:
+            logger.warning("No API key configured - allowing access in development mode")
+            return True
+        
+        # Check if provided key matches expected key
+        if provided_key != expected_key:
+            raise HTTPException(
+                status_code=401,
+                detail=create_error_response(
+                    "Invalid API key",
+                    "AuthenticationError",
+                    "The provided API key is invalid"
+                )
+            )
+        
+        return True
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("API key validation failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=create_error_response(
+                "Authentication system error",
+                "AuthSystemError",
+                str(e)
+            )
+        )
+
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -144,7 +236,7 @@ class ErrorResponse(BaseModel):
 # Konfiguration laden
 try:
     config = get_config()
-    logger.info("Configuration loaded successfully", environment=config.environment.value)
+    logger.info(f"Configuration loaded successfully - environment: {config.environment.value}")
 except Exception as e:
     logger.error(f"Failed to load configuration: {e}")
     config = MockConfig()
@@ -241,11 +333,9 @@ async def startup_event():
         # Health check
         health_status = classifier.get_health_status()
         if health_status["status"] == "healthy":
-            logger.info("ML classifier loaded successfully", 
-                       device=health_status.get("device"),
-                       model_info=health_status.get("model_info", {}))
+            logger.info(f"ML classifier loaded successfully - device: {health_status.get('device')}, model: {health_status.get('model_info', {})}")
         else:
-            logger.error("ML classifier health check failed", status=health_status)
+            logger.error(f"ML classifier health check failed - status: {health_status}")
             
     except Exception as e:
         logger.error(f"Failed to initialize classifier: {e}", exc_info=True)
@@ -357,7 +447,7 @@ async def classify_text(
 ):
     """Classify a single text input"""
     try:
-        logger.info("Text classification request", text_length=len(request.text))
+        logger.info(f"Text classification request - length: {len(request.text)}")
         
         start_time = time.time()
         result = ml_classifier.classify_text(request.text)
@@ -609,6 +699,409 @@ async def get_model_info(
         )
 
 # ============================================================================
+# COMBINED PROCESSING ENDPOINT
+# ============================================================================
+
+@app.post("/process/pdf", 
+          response_model=ProcessPDFResponse,
+          summary="Process PDF (Classify + Index)",
+          description="Upload PDF for immediate classification and indexing in one call",
+          tags=["Combined Processing"])
+async def process_pdf_endpoint(
+    file: UploadFile = File(..., description="PDF file to process"),
+    chunking_strategy: str = Field(default="semantic", description="Chunking strategy to use"),
+    max_chunk_size: int = Field(default=1000, description="Maximum chunk size"),
+    store_in_pinecone: bool = Field(default=True, description="Store embeddings in Pinecone"),
+    store_in_sqlite: bool = Field(default=True, description="Store document in SQLite"),
+    authenticated: bool = Depends(verify_api_key)
+):
+    """
+    Combined endpoint that performs classification and indexing in one API call.
+    
+    - Classifies the PDF document
+    - Extracts and chunks the content
+    - Embeds chunks and stores in Pinecone + SQLite
+    
+    Returns combined results from both operations.
+    """
+    import tempfile
+    from pathlib import Path
+    from ..ingest import process_pdf
+    
+    try:
+        logger.info(f"Combined PDF processing request - filename: {file.filename}")
+        start_time = time.time()
+        
+        # Validate file
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(
+                status_code=400,
+                detail=create_error_response(
+                    "Invalid file format. Only PDF files are allowed.",
+                    "ValidationError",
+                    f"File: {file.filename}"
+                )
+            )
+        
+        # Save uploaded file temporarily
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+        tmp_file = Path(tmp_path)
+        
+        try:
+            # Write uploaded file content
+            with tmp_file.open("wb") as fp:
+                content = await file.read()
+                fp.write(content)
+            
+            # Use unified processing function
+            result = process_pdf(
+                file_path=str(tmp_file),
+                store_in_pinecone=store_in_pinecone,
+                store_in_sqlite=store_in_sqlite
+            )
+            
+            # Transform result to match API response format
+            processing_time = time.time() - start_time
+            
+            # Extract classification data
+            classification_data = result["classification"]
+            
+            # Build storage/ingestion results
+            ingest_result = {
+                "status": "success",
+                "storage_results": result["storage"],
+                "metadata": result["metadata"],
+                "doc_id": result["metadata"].get("document_id")
+            }
+            
+            return ProcessPDFResponse(
+                message="PDF processed successfully",
+                filename=file.filename,
+                file_size=len(content),
+                processing_time=processing_time,
+                classification={
+                    "predicted_label": classification_data["predicted_label"],
+                    "predicted_category": classification_data.get("predicted_category", classification_data["predicted_label"]),
+                    "confidence": classification_data["confidence"],
+                    "all_scores": classification_data.get("all_scores", {}),
+                    "processing_time": processing_time
+                },
+                extraction={
+                    "text_length": result["text_length"],
+                    "chunking_strategy": chunking_strategy,
+                    "max_chunk_size": max_chunk_size,
+                    "chunks_created": result["storage"].get("pinecone", {}).get("chunks_stored", 1)
+                },
+                ingest=ingest_result
+            )
+            
+        finally:
+            # Cleanup temporary file
+            tmp_file.unlink(missing_ok=True)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Combined PDF processing failed: {e}", filename=file.filename)
+        raise HTTPException(
+            status_code=500,
+            detail=create_error_response(
+                "Combined PDF processing failed",
+                "ProcessPDFError",
+                str(e)
+            )
+        )
+
+# ============================================================================
+# BACKGROUND INGESTION ENDPOINTS
+# ============================================================================
+
+@app.post("/ingest/pdf", 
+          summary="Start Background PDF Ingestion", 
+          description="Upload PDF for background processing with classification and vector storage",
+          response_model=dict,
+          tags=["Background Ingestion"])
+async def ingest_pdf_background(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="PDF file to process"),
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    """
+    Upload PDF for background ingestion processing.
+    
+    Returns job ID for tracking processing status.
+    """
+    try:
+        # Validate authentication
+        validate_api_key(credentials.credentials)
+        
+        # Validate file
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(
+                status_code=400, 
+                detail=create_error_response(
+                    "Invalid file format. Only PDF files are allowed.",
+                    "ValidationError",
+                    f"File: {file.filename}"
+                )
+            )
+        
+        # Save uploaded file temporarily
+        temp_dir = Path(tempfile.gettempdir()) / "bu_processor_uploads"
+        temp_dir.mkdir(exist_ok=True)
+        
+        file_path = temp_dir / f"{uuid.uuid4()}_{file.filename}"
+        
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        logger.info("PDF uploaded for background processing", 
+                   filename=file.filename, 
+                   file_size=len(content))
+        
+        # Import ingestion module
+        from ..ingest import process_pdf
+        
+        # Define background processing task
+        def _background_process():
+            """Background task that processes the PDF"""
+            try:
+                # Use unified processing function
+                result = process_pdf(
+                    file_path=str(file_path),
+                    store_in_pinecone=True,
+                    store_in_sqlite=True
+                )
+                logger.info("Background processing completed", 
+                           filename=file.filename,
+                           classification=result['classification']['predicted_label'])
+                return result
+            except Exception as e:
+                logger.error("Background processing failed", 
+                            filename=file.filename, 
+                            error=str(e))
+                raise
+        
+        # Start background processing
+        background_tasks.add_task(_background_process)
+        
+        # Create job entry
+        from ..ingest import get_job_manager
+        job_manager = get_job_manager()
+        job = job_manager.create_job(str(file_path), file.filename)
+        
+        return {
+            "status": "accepted",
+            "message": "PDF upload successful, processing started in background",
+            "job_id": job.job_id,
+            "filename": file.filename,
+            "file_size": len(content),
+            "created_at": job.created_at.isoformat(),
+            "tracking_url": f"/ingest/status/{job.job_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Background PDF ingestion failed", error=str(e), filename=file.filename)
+        raise HTTPException(
+            status_code=500,
+            detail=create_error_response(
+                "Failed to start background PDF processing",
+                "IngestionError", 
+                str(e)
+            )
+        )
+
+@app.get("/ingest/status/{job_id}",
+         summary="Get Job Status",
+         description="Get the status and results of a background ingestion job",
+         response_model=dict,
+         tags=["Background Ingestion"])
+async def get_job_status(
+    job_id: str,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    """Get status and results of background ingestion job"""
+    try:
+        # Validate authentication
+        validate_api_key(credentials.credentials)
+        
+        # Get job manager and job
+        from ..ingest import get_job_manager
+        job_manager = get_job_manager()
+        job = job_manager.get_job(job_id)
+        
+        if not job:
+            raise HTTPException(
+                status_code=404,
+                detail=create_error_response(
+                    f"Job {job_id} not found",
+                    "JobNotFound",
+                    "The specified job ID does not exist"
+                )
+            )
+        
+        # Prepare response
+        response = {
+            "job_id": job.job_id,
+            "filename": job.filename,
+            "status": job.status,
+            "created_at": job.created_at.isoformat(),
+            "retry_count": job.retry_count,
+            "max_retries": job.max_retries
+        }
+        
+        if job.started_at:
+            response["started_at"] = job.started_at.isoformat()
+        
+        if job.completed_at:
+            response["completed_at"] = job.completed_at.isoformat()
+            response["processing_duration"] = (job.completed_at - job.started_at).total_seconds()
+        
+        if job.error_message:
+            response["error_message"] = job.error_message
+        
+        if job.result:
+            response["result"] = job.result
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get job status", job_id=job_id, error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=create_error_response(
+                "Failed to retrieve job status",
+                "StatusError",
+                str(e)
+            )
+        )
+
+@app.get("/ingest/jobs",
+         summary="List All Jobs", 
+         description="Get list of all background ingestion jobs",
+         response_model=dict,
+         tags=["Background Ingestion"])
+async def list_jobs(
+    status: Optional[str] = None,
+    limit: int = 50,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    """List all background ingestion jobs with optional status filter"""
+    try:
+        # Validate authentication
+        validate_api_key(credentials.credentials)
+        
+        # Get job manager
+        from ..ingest import get_job_manager
+        job_manager = get_job_manager()
+        jobs = job_manager.list_jobs()
+        
+        # Filter by status if provided
+        if status:
+            jobs = [job for job in jobs if job.status == status]
+        
+        # Limit results
+        jobs = jobs[:limit]
+        
+        # Format response
+        job_list = []
+        for job in jobs:
+            job_data = {
+                "job_id": job.job_id,
+                "filename": job.filename,
+                "status": job.status,
+                "created_at": job.created_at.isoformat(),
+                "retry_count": job.retry_count
+            }
+            
+            if job.started_at:
+                job_data["started_at"] = job.started_at.isoformat()
+            
+            if job.completed_at:
+                job_data["completed_at"] = job.completed_at.isoformat()
+                job_data["processing_duration"] = (job.completed_at - job.started_at).total_seconds()
+            
+            if job.error_message:
+                job_data["error_message"] = job.error_message
+            
+            job_list.append(job_data)
+        
+        return {
+            "total_jobs": len(job_list),
+            "status_filter": status,
+            "limit": limit,
+            "jobs": job_list
+        }
+        
+    except Exception as e:
+        logger.error("Failed to list jobs", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=create_error_response(
+                "Failed to list background jobs",
+                "ListJobsError",
+                str(e)
+            )
+        )
+
+@app.delete("/ingest/jobs/{job_id}",
+            summary="Cancel/Delete Job",
+            description="Cancel a running job or delete a completed job",
+            response_model=dict,
+            tags=["Background Ingestion"])
+async def delete_job(
+    job_id: str,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    """Cancel or delete a background ingestion job"""
+    try:
+        # Validate authentication
+        validate_api_key(credentials.credentials)
+        
+        # Get job manager
+        from ..ingest import get_job_manager
+        job_manager = get_job_manager()
+        job = job_manager.get_job(job_id)
+        
+        if not job:
+            raise HTTPException(
+                status_code=404,
+                detail=create_error_response(
+                    f"Job {job_id} not found",
+                    "JobNotFound",
+                    "The specified job ID does not exist"
+                )
+            )
+        
+        # Remove job
+        del job_manager.jobs[job_id]
+        
+        return {
+            "status": "success",
+            "message": f"Job {job_id} deleted successfully",
+            "job_id": job_id,
+            "was_status": job.status
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to delete job", job_id=job_id, error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=create_error_response(
+                "Failed to delete job",
+                "DeleteJobError",
+                str(e)
+            )
+        )
+
+# ============================================================================
 # MAIN FUNCTION FOR RUNNING THE SERVER
 # ============================================================================
 
@@ -618,7 +1111,7 @@ def main():
     port = getattr(config.api, 'port', 8000) if hasattr(config, 'api') else 8000
     debug = getattr(config, 'debug', True)
     
-    logger.info("Starting BU-Processor API server", host=host, port=port, debug=debug)
+    logger.info(f"Starting BU-Processor API server - host: {host}, port: {port}, debug: {debug}")
     
     uvicorn.run(
         "bu_processor.api.main:app",

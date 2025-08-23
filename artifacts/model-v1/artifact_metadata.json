@@ -1,0 +1,19 @@
+{
+  "artifact_version": "v1",
+  "source_model": "deepset/gbert-base",
+  "num_labels": 8,
+  "labels": [
+    "BU_Bedingungswerk",
+    "BU_Antrag",
+    "BU_Risikopruefung",
+    "BU_Leitfaden",
+    "BU_Fallbeispiel",
+    "BU_FAQ",
+    "BU_Presse",
+    "Sonstiges"
+  ],
+  "created_at": "2025-08-23T00:00:00Z",
+  "description": "Bootstrap BU classifier model artifact",
+  "training_status": "untrained",
+  "notes": "Classification head randomly initialized - requires training for production use"
+}

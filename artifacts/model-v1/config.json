@@ -1,0 +1,44 @@
+{
+  "architectures": [
+    "BertForSequenceClassification"
+  ],
+  "attention_probs_dropout_prob": 0.1,
+  "classifier_dropout": null,
+  "hidden_act": "gelu",
+  "hidden_dropout_prob": 0.1,
+  "hidden_size": 768,
+  "id2label": {
+    "0": "BU_Bedingungswerk",
+    "1": "BU_Antrag",
+    "2": "BU_Risikopruefung",
+    "3": "BU_Leitfaden",
+    "4": "BU_Fallbeispiel",
+    "5": "BU_FAQ",
+    "6": "BU_Presse",
+    "7": "Sonstiges"
+  },
+  "initializer_range": 0.02,
+  "intermediate_size": 3072,
+  "label2id": {
+    "BU_Antrag": 1,
+    "BU_Bedingungswerk": 0,
+    "BU_FAQ": 5,
+    "BU_Fallbeispiel": 4,
+    "BU_Leitfaden": 3,
+    "BU_Presse": 6,
+    "BU_Risikopruefung": 2,
+    "Sonstiges": 7
+  },
+  "layer_norm_eps": 1e-12,
+  "max_position_embeddings": 512,
+  "model_type": "bert",
+  "num_attention_heads": 12,
+  "num_hidden_layers": 12,
+  "pad_token_id": 0,
+  "position_embedding_type": "absolute",
+  "torch_dtype": "float32",
+  "transformers_version": "4.55.0",
+  "type_vocab_size": 2,
+  "use_cache": true,
+  "vocab_size": 31102
+}

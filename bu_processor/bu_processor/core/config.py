@@ -14,7 +14,6 @@ KEY IMPROVEMENTS:
 - Sensible Defaults: Entwickler-freundliche Standardwerte
 """
 
-import logging
 import os
 import yaml
 from pathlib import Path
@@ -25,7 +24,41 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic.types import PositiveInt, PositiveFloat
 
-logger = logging.getLogger(__name__)
+# Setup structured logging
+try:
+    from .logging_setup import get_logger
+    logger = get_logger(__name__)
+except ImportError:
+    # Fallback to basic logging if logging_setup is not available
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    class CompatibilityLogger:
+        def __init__(self, name):
+            self._logger = logging.getLogger(name)
+        
+        def _format_kwargs(self, msg, **kwargs):
+            if kwargs:
+                context = " ".join(f"{k}={v}" for k, v in kwargs.items())
+                return f"{msg} [{context}]"
+            return msg
+        
+        def info(self, msg, **kwargs):
+            self._logger.info(self._format_kwargs(msg, **kwargs))
+        
+        def debug(self, msg, **kwargs):
+            self._logger.debug(self._format_kwargs(msg, **kwargs))
+        
+        def warning(self, msg, **kwargs):
+            self._logger.warning(self._format_kwargs(msg, **kwargs))
+        
+        def error(self, msg, **kwargs):
+            self._logger.error(self._format_kwargs(msg, **kwargs))
+        
+        def exception(self, msg, **kwargs):
+            self._logger.exception(self._format_kwargs(msg, **kwargs))
+    
+    logger = CompatibilityLogger(__name__)
 
 # ============================================================================
 # ENUMS FÜR TYPE SAFETY
@@ -118,7 +151,7 @@ class MLModelConfig(BaseSettings):
         if not path.exists():
             # Erstelle Verzeichnis falls nicht vorhanden
             path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Model-Pfad erstellt: {path.parent}")
+            logger.info("Model-Pfad erstellt", path=str(path.parent))
         return v
     
     @field_validator('sentence_transformer_model')
@@ -294,7 +327,7 @@ class APIConfig(BaseSettings):
             # Warne vor offensichtlich unsicheren Keys
             weak_keys = ['12345678', 'password', 'apikey123', 'test1234', 'development']
             if v.lower() in weak_keys:
-                logger.warning(f"Schwacher API Key erkannt, beginnt mit: {v[:3]}...")
+                logger.warning("Schwacher API Key erkannt", key_prefix=v[:3])
         
         return v
 
@@ -339,7 +372,7 @@ class VectorDatabaseConfig(BaseSettings):
     @classmethod
     def validate_pinecone_key(cls, v: Optional[str]):
         """Validiere Pinecone API Key falls gesetzt"""
-        if v and (len(v) < 10 or not v.startswith(('pc-', 'sk-'))):
+        if v and (len(v) < 10 or not v.startswith('pcsk_')):
             raise ValueError("Ungültiger Pinecone API Key Format")
         return v
 
@@ -915,15 +948,13 @@ def create_config(
                 yaml_path = project_root / "config.yaml"
             
             if yaml_path.exists():
-                logger.info(f"Lade Konfiguration aus YAML: {yaml_path}")
+                logger.info("Lade Konfiguration aus YAML", yaml_path=str(yaml_path))
                 config = BUProcessorConfig.parse_yaml(str(yaml_path))
                 
-                logger.info(
-                    f"YAML-Konfiguration erfolgreich geladen - "
-                    f"Environment: {config.environment.value}, "
-                    f"Log Level: {config.log_level.value}, "
-                    f"Source: yaml"
-                )
+                logger.info("YAML-Konfiguration erfolgreich geladen", 
+                           environment=config.environment.value,
+                           log_level=config.log_level.value,
+                           source="yaml")
                 return config
             else:
                 logger.info("Keine config.yaml gefunden, fallback zu .env")
@@ -932,21 +963,19 @@ def create_config(
         env_file = config_file or ".env"
         config = BUProcessorConfig(_env_file=env_file)
         
-        logger.info(
-            f"Konfiguration erfolgreich geladen - "
-            f"Environment: {config.environment.value}, "
-            f"Log Level: {config.log_level.value}, "
-            f"Vector DB: {config.is_feature_enabled('vector_db')}, "
-            f"Chatbot: {config.is_feature_enabled('chatbot')}, "
-            f"Semantic: {config.is_feature_enabled('semantic_clustering')}, "
-            f"Deduplication: {config.is_feature_enabled('semantic_deduplication')}, "
-            f"Source: env"
-        )
+        logger.info("Konfiguration erfolgreich geladen",
+                   environment=config.environment.value,
+                   log_level=config.log_level.value,
+                   vector_db=config.is_feature_enabled('vector_db'),
+                   chatbot=config.is_feature_enabled('chatbot'),
+                   semantic=config.is_feature_enabled('semantic_clustering'),
+                   deduplication=config.is_feature_enabled('semantic_deduplication'),
+                   source="env")
         
         return config
     
     except Exception as e:
-        logger.error(f"Konfigurationsfehler: {e}")
+        logger.error("Konfigurationsfehler", error=str(e))
         logger.info("Fallback zu Development-Konfiguration")
         
         # Fallback zu minimaler Development-Konfiguration
@@ -1011,13 +1040,13 @@ try:
     # Validierung
     config_issues = validate_config(settings)
     if config_issues:
-        logger.warning(f"Konfigurationswarnungen gefunden: {config_issues}")
+        logger.warning("Konfigurationswarnungen gefunden", issues=config_issues)
     else:
         logger.info("Konfiguration erfolgreich validiert")
 
 except Exception as e:
     # Fallback logging
-    logger.error(f"Kritischer Konfigurationsfehler: {e}")
+    logger.error("Kritischer Konfigurationsfehler", error=str(e))
     
     # Fallback zu minimaler Konfiguration
     settings = BUProcessorConfig(environment=Environment.DEVELOPMENT)
@@ -1111,7 +1140,7 @@ def demo_config() -> None:
     
     # Zeige aktuelle Konfiguration
     env_info = settings.get_environment_info()
-    logger.info(f"Environment Info: {env_info}")
+    logger.info("Environment Info", environment_info=env_info)
     
     # Teste verschiedene Environments - sicher ohne eval()
     logger.info("Testing Different Environments")
@@ -1123,30 +1152,27 @@ def demo_config() -> None:
     }
     
     for env_name, env_enum in environments.items():
-        logger.info(f"Testing {env_name.upper()} environment")
+        logger.info("Testing environment", environment=env_name.upper())
         try:
             test_config = create_config(environment=env_name)
             
-            logger.info(
-                f"{env_name.upper()} config - "
-                f"Debug: {test_config.debug}, "
-                f"Log Level: {test_config.log_level.value}, "
-                f"Max PDF Size: {test_config.pdf_processing.max_pdf_size_mb}MB, "
-                f"Batch Count: {test_config.pdf_processing.max_batch_pdf_count}, "
-                f"Cache Enabled: {test_config.pdf_processing.enable_cache}"
-            )
+            logger.info("Environment config loaded",
+                       environment=env_name.upper(),
+                       debug=test_config.debug,
+                       log_level=test_config.log_level.value,
+                       max_pdf_size_mb=test_config.pdf_processing.max_pdf_size_mb,
+                       max_batch_count=test_config.pdf_processing.max_batch_pdf_count,
+                       cache_enabled=test_config.pdf_processing.enable_cache)
         except Exception as e:
-            logger.error(f"Fehler beim Testen von {env_name}: {e}")
+            logger.error("Fehler beim Testen von environment", environment=env_name, error=str(e))
     
     # Zeige Pfade
     try:
-        logger.info(
-            f"Wichtige Pfade - "
-            f"Cache Dir: {settings.get_cache_dir()}, "
-            f"Model Dir: {settings.get_model_dir()}"
-        )
+        logger.info("Wichtige Pfade",
+                   cache_dir=str(settings.get_cache_dir()),
+                   model_dir=str(settings.get_model_dir()))
     except Exception as e:
-        logger.error(f"Fehler beim Laden der Pfade: {e}")
+        logger.error("Fehler beim Laden der Pfade", error=str(e))
     
     # Zeige Features - sichere Iteration
     feature_list = ["vector_db", "chatbot", "cache", "gpu", "metadata_extraction", "semantic_clustering", "semantic_deduplication"]
@@ -1156,20 +1182,20 @@ def demo_config() -> None:
         try:
             feature_status[feature] = settings.is_feature_enabled(feature)
         except Exception as e:
-            logger.warning(f"Fehler beim Prüfen von Feature {feature}: {e}")
+            logger.warning("Fehler beim Prüfen von Feature", feature=feature, error=str(e))
             feature_status[feature] = False
     
-    logger.info(f"Feature Status: {feature_status}")
+    logger.info("Feature Status", feature_status=feature_status)
     
     # Validierungscheck
     try:
         issues = validate_config(settings)
         if issues:
-            logger.warning(f"Konfigurationsprobleme gefunden: {issues}")
+            logger.warning("Konfigurationsprobleme gefunden", issues=issues)
         else:
             logger.info("Keine Konfigurationsprobleme gefunden")
     except Exception as e:
-        logger.error(f"Fehler bei Konfigurationsvalidierung: {e}")
+        logger.error("Fehler bei Konfigurationsvalidierung", error=str(e))
     
     logger.info("Configuration Demo completed!")
 

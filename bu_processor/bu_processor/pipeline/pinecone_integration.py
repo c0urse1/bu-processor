@@ -20,8 +20,8 @@ ENHANCED FEATURES:
 from __future__ import annotations
 
 import os
-import structlog
-logger = structlog.get_logger("pinecone_integration")
+from ..core.logging_setup import get_logger
+logger = get_logger("pinecone_integration")
 
 # =============================================================================
 # 2.1 ROBUST ENVIRONMENT GATING AT MODULE TOP
@@ -119,6 +119,15 @@ try:
 except ImportError:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
 
+# Optional OpenAI backend (used via our wrapper class)
+OPENAI_SDK_AVAILABLE = False
+try:
+    # import check only; we instantiate via our wrapper
+    import openai  # type: ignore
+    OPENAI_SDK_AVAILABLE = True
+except Exception:
+    OPENAI_SDK_AVAILABLE = False
+
 # Prometheus Metrics
 try:
     from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry, generate_latest
@@ -137,10 +146,9 @@ from rich.table import Table
 from rich.panel import Panel
 
 # Configuration
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, validator, model_validator
 from enum import Enum
 
-logger = structlog.get_logger("pinecone_integration")
 console = Console()
 
 # =============================================================================
@@ -327,16 +335,32 @@ class AsyncPineconeConfig(BaseModel):
     """Enhanced Konfiguration für Async Pinecone Integration"""
     
     # Pinecone Credentials
-    api_key: str = os.getenv("PINECONE_API_KEY", "")
+    # accept both legacy and BU_-prefixed keys
+    api_key: str = (
+        os.getenv("PINECONE_API_KEY")
+        or os.getenv("BU_VECTOR_DB__PINECONE_API_KEY")
+        or ""
+    )
     environment: PineconeEnvironment = PineconeEnvironment.US_EAST_1
     
     # Index Configuration
-    index_name: str = "bu-processor-embeddings"
-    dimension: int = 384  # Standard für MiniLM-L12-v2
+    index_name: str = os.getenv("PINECONE_INDEX", os.getenv("BU_VECTOR_DB__PINECONE_INDEX_NAME", "bu-processor-embeddings"))
+    # allow env override for dimension
+    dimension: int = int(os.getenv("PINECONE_DIMENSION", os.getenv("BU_VECTOR_DB__EMBEDDING_DIMENSION", "384")))  # Standard für MiniLM-L12-v2
     metric: str = "cosine"
     
-    # Embedding Model
+    # Embedding Model / Backend selection
+    # Backend: 'sbert' (default) or 'openai'
+    embeddings_backend: str = os.getenv("EMBEDDINGS_BACKEND", os.getenv("BU_EMBEDDINGS__BACKEND", "sbert"))
+    # SBERT model when using 'sbert'
     embedding_model: EmbeddingModel = EmbeddingModel.MULTILINGUAL_MINI
+    # OpenAI settings when using 'openai'
+    openai_api_key: str = (
+        os.getenv("OPENAI_API_KEY")
+        or os.getenv("BU_OPENAI__OPENAI_API_KEY")
+        or ""
+    )
+    openai_embed_model: str = os.getenv("OPENAI_EMBED_MODEL", os.getenv("BU_OPENAI__EMBED_MODEL", "text-embedding-3-small"))
     embedding_device: str = "cpu"  # oder "cuda" falls verfügbar
     
     # Enhanced Batch Settings
@@ -382,8 +406,8 @@ class AsyncPineconeConfig(BaseModel):
     
     @validator("dimension")
     def validate_dimension(cls, v):
-        if v not in [128, 256, 384, 512, 768, 1024, 1536]:
-            raise ValueError("Dimension must be one of: 128, 256, 384, 512, 768, 1024, 1536")
+        if v not in [128, 256, 384, 512, 768, 1024, 1536, 3072]:
+            raise ValueError("Dimension must be one of: 128, 256, 384, 512, 768, 1024, 1536, 3072")
         return v
     
     @validator("batch_size")
@@ -391,6 +415,44 @@ class AsyncPineconeConfig(BaseModel):
         if v > 1000:
             logger.warning("Batch size > 1000 may cause API limits")
         return v
+
+    @validator("embeddings_backend")
+    def validate_backend(cls, v):
+        v_norm = (v or "").strip().lower()
+        if v_norm not in ("sbert", "openai"):
+            raise ValueError("embeddings_backend must be 'sbert' or 'openai'")
+        return v_norm
+
+    def get_model_name(self) -> str:
+        """Return human-readable model name based on backend."""
+        if (self.embeddings_backend or "sbert").lower() == "openai":
+            return self.openai_embed_model
+        return self.embedding_model.value
+
+    @model_validator(mode="before")
+    def sync_dimension_with_backend(cls, data):
+        """Auto-adjust dimension to match selected backend/model when not explicitly set."""
+        try:
+            if not isinstance(data, dict):
+                return data
+            backend = (data.get("embeddings_backend") or "sbert").lower()
+            dim = int(data.get("dimension") or 384)
+            if backend == "openai":
+                model = (data.get("openai_embed_model") or "").strip()
+                expected = {"text-embedding-3-small": 1536, "text-embedding-3-large": 3072}.get(model)
+                # If model implies a specific dimension and current dim is not in {1536,3072}, align to expected
+                if expected and dim not in (1536, 3072):
+                    data["dimension"] = expected
+                    dim = expected
+                # If user configured dimension explicitly to 3072/1536, but model doesn't match, align model
+                if dim == 3072 and model != "text-embedding-3-large":
+                    data["openai_embed_model"] = "text-embedding-3-large"
+                elif dim == 1536 and model not in ("", "text-embedding-3-small"):
+                    data["openai_embed_model"] = "text-embedding-3-small"
+        except Exception:
+            # be permissive; embedding generator will probe dimension later
+            return data
+        return data
     
     class Config:
         env_file = ".env"
@@ -1145,12 +1207,19 @@ class AsyncEmbeddingGenerator:
     """Enhanced Embedding Generator with async support and caching"""
     
     def __init__(self, config: AsyncPineconeConfig, metrics: PineconeMetrics):
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("SentenceTransformers not available. Install with: pip install sentence-transformers")
+        # Validate availability based on selected backend
+        if (config.embeddings_backend or "sbert").lower() == "sbert":
+            if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                raise ImportError("SentenceTransformers not available. Install with: pip install sentence-transformers")
+        else:
+            # openai backend
+            if not OPENAI_SDK_AVAILABLE:
+                raise ImportError("OpenAI SDK not available. Install with: pip install openai>=1.30")
         
         self.config = config
         self.metrics = metrics
-        self.model = None
+        self.model = None  # SBERT model or OpenAIEmbeddings wrapper
+        self.backend = (self.config.embeddings_backend or "sbert").lower()
         self.embedding_cache = OrderedDict()  # Thread-safe FIFO cache
         self.cache_lock = RLock()
         
@@ -1158,30 +1227,40 @@ class AsyncEmbeddingGenerator:
         self._load_model()
     
     def _load_model(self):
-        """Load SentenceTransformer Model"""
+        """Load embedding model based on selected backend."""
         try:
-            logger.info("Loading embedding model", model=self.config.embedding_model.value)
-            
-            self.model = SentenceTransformer(
-                self.config.embedding_model.value,
-                device=self.config.embedding_device
-            )
-            
-            # Validate dimension
-            test_embedding = self.model.encode(["Test text"], convert_to_numpy=True)
-            actual_dimension = test_embedding.shape[1]
-            
+            model_name = self.config.get_model_name()
+            logger.info("Loading embedding model", model=model_name, backend=self.backend)
+
+            if self.backend == "openai":
+                # Lazy import of our wrapper to avoid heavy deps when unused
+                from bu_processor.embeddings.openai_backend import OpenAIEmbeddings
+                if not self.config.openai_api_key:
+                    raise ValueError("OPENAI_API_KEY not configured for openai embeddings backend")
+                self.model = OpenAIEmbeddings(api_key=self.config.openai_api_key, model=self.config.openai_embed_model)
+                # Probe dimension with a tiny encode
+                test_embedding = self.model.encode(["Test text"])  # returns np.ndarray
+                actual_dimension = int(test_embedding.shape[1])
+            else:
+                # Default SBERT path
+                self.model = SentenceTransformer(
+                    self.config.embedding_model.value,
+                    device=self.config.embedding_device
+                )
+                test_embedding = self.model.encode(["Test text"], convert_to_numpy=True)
+                actual_dimension = int(test_embedding.shape[1])
+
             if actual_dimension != self.config.dimension:
-                logger.warning("Dimension mismatch", 
-                             expected=self.config.dimension,
-                             actual=actual_dimension)
-                # Update config
+                logger.warning("Dimension mismatch", expected=self.config.dimension, actual=actual_dimension)
+                # Update config to match real model
                 self.config.dimension = actual_dimension
-            
-            logger.info("Embedding model loaded successfully", 
-                       dimension=actual_dimension,
-                       device=self.config.embedding_device)
-            
+
+            # Log successfully loaded
+            if self.backend == "openai":
+                logger.info("Embedding model loaded successfully", dimension=actual_dimension, provider="openai")
+            else:
+                logger.info("Embedding model loaded successfully", dimension=actual_dimension, device=self.config.embedding_device)
+
         except Exception as e:
             logger.error("Failed to load embedding model", error=str(e))
             raise
@@ -1239,12 +1318,17 @@ class AsyncEmbeddingGenerator:
                 loop = asyncio.get_event_loop()
                 
                 def generate_embeddings_sync():
-                    return self.model.encode(
-                        texts_to_encode,
-                        convert_to_numpy=True,
-                        show_progress_bar=show_progress and len(texts_to_encode) > 10,
-                        batch_size=min(64, len(texts_to_encode))  # Optimized batch size
-                    )
+                    # Use appropriate call signature per backend
+                    if self.backend == "openai":
+                        # Our wrapper returns np.ndarray normalized for cosine
+                        return self.model.encode(texts_to_encode)
+                    else:
+                        return self.model.encode(
+                            texts_to_encode,
+                            convert_to_numpy=True,
+                            show_progress_bar=show_progress and len(texts_to_encode) > 10,
+                            batch_size=min(64, len(texts_to_encode))  # Optimized batch size
+                        )
                 
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     new_embeddings = await loop.run_in_executor(executor, generate_embeddings_sync)
@@ -1272,9 +1356,9 @@ class AsyncEmbeddingGenerator:
                 # Record metrics
                 duration = time.time() - start_time
                 self.metrics.record_embedding_generation(
-                    duration, 
-                    len(texts_to_encode), 
-                    self.config.embedding_model.value
+                    duration,
+                    len(texts_to_encode),
+                    self.config.get_model_name()
                 )
                 
                 return final_embeddings
@@ -1334,11 +1418,13 @@ class AsyncPineconePipeline:
             "last_processing_session": None
         }
         
-        logger.info("Enhanced Async Pinecone pipeline initialized", 
-                   index=self.config.index_name,
-                   model=self.config.embedding_model.value,
-                   async_enabled=self.config.enable_async,
-                   batch_size=self.config.batch_size)
+        logger.info(
+            "Enhanced Async Pinecone pipeline initialized",
+            index=self.config.index_name,
+            model=self.config.get_model_name(),
+            async_enabled=self.config.enable_async,
+            batch_size=self.config.batch_size,
+        )
 
 # =============================================================================
 # BACKWARDS COMPATIBILITY SHIMS (Legacy API EXPECTATIONS)
@@ -1582,7 +1668,7 @@ class PineconeManager:  # pragma: no cover - dünner Kompatibilitätslayer
             status = {
                 "pinecone_connected": self.manager.index is not None,
                 "async_enabled": self.config.enable_async,
-                "embedding_model": self.config.embedding_model.value,
+                "embedding_model": self.config.get_model_name(),
                 "embedding_dimension": self.config.dimension,
                 "manager_stats": manager_stats,
                 "pipeline_stats": self.pipeline_stats,

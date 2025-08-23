@@ -12,12 +12,27 @@ authors = [
   { name = "Nicl", email = "nicl@test.de" }
 ]
 requires-python = ">=3.8"        # Minimale Python-Version
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bu_processor*"]
+exclude = ["tests*", "docs*", "examples*"]
 dependencies = [
   "pydantic>=2.0",
   "pydantic-settings>=2.0",      # für BaseSettings in Pydantic 2.x
   "transformers>=4.0",
   "pinecone>=5.0.0",
-  # …füge hier deine weiteren Laufzeit-Abhängigkeiten hinzu…
+  "openai>=1.35.0",              # OpenAI API client
+  "tiktoken>=0.7.0",             # OpenAI tokenizer
+  # PDF Processing
+  "PyMuPDF>=1.24.5",
+  "PyPDF2>=3.0.1", 
+  "pdfplumber>=0.11.0",
+  # Vector Search & Retrieval
+  "faiss-cpu>=1.7.4",
+  "rank-bm25>=0.2.2",
+  # Configuration
+  "python-dotenv>=1.0.1"
 ]
 
 [project.optional-dependencies]

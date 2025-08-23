@@ -37,3 +37,9 @@ if _inner_dir.exists() and _inner_dir.is_dir():  # pragma: no cover (import-time
 	except Exception:  # pragma: no cover
 		# Fallback: leave __all__ undefined if inner import fails
 		pass
+
+# Explicitly import key classes for easy access
+try:
+	from .bu_processor import EnhancedIntegratedPipeline
+except ImportError:
+	pass

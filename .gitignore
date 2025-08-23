@@ -49,6 +49,31 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Large model files (use Git LFS or dynamic loading instead)
+*.safetensors
+*.bin
+# Model files and artifacts (too large for GitHub)
+*.ckpt
+*.pth
+*.h5
+artifacts/*/model.safetensors
+artifacts/*/pytorch_model.bin
+artifacts/*/model.bin
+artifacts/*/tf_model.h5
+artifacts/*/flax_model.msgpack
+
+# Keep only essential artifact files
+artifacts/*/config.json
+!artifacts/*/labels.txt
+!artifacts/*/artifact_metadata.json
+!artifacts/*/tokenizer*.json
+!artifacts/*/vocab.txt
+!artifacts/*/special_tokens_map.json
+
+# Temporary upload files
+temp_uploads/
+uploads/
+
 # Translations
 *.mo
 *.pot
@@ -96,7 +121,17 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+# Ignore environment files, but keep example templates tracked
 .env
+.env.*
+!.env.example
+!.env.*.example
+!.example.env
+
+# Common typo variants
+.evn
+.evn.*
+
 .venv
 env/
 venv/
@@ -139,3 +174,6 @@ Thumbs.db
 # Data files (if sensitive)
 data/sensitive/
 data/private/
+
+# Documents
+*.pdf

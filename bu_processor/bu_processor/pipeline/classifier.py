@@ -1182,9 +1182,28 @@ class RealMLClassifier:
             return self.classify_extracted_content(extracted_content, classify_chunks_individually)
             
         except Exception as e:
-            logger.error(f"PDF-Klassifikation fehlgeschlagen für {pdf_path}: {e}", exc_info=True)
+            import traceback
+            full_traceback = traceback.format_exc()
+            
+            # Log with explicit traceback to ensure it's visible
+            logger.error("PDF-Klassifikation fehlgeschlagen", 
+                        pdf_path=str(pdf_path),
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        traceback=full_traceback)
+            
+            # Also print to console to ensure visibility
+            print(f"🔥 FEHLER in PDF-Klassifikation für {pdf_path}:")
+            print(f"   Fehler: {e}")
+            print(f"   Typ: {type(e).__name__}")
+            print("   Vollständiger Traceback:")
+            print(full_traceback)
+            print("=" * 80)
+            
             error_result = {
                 "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": full_traceback,
                 "input_type": "pdf",
                 "file_path": str(pdf_path),
                 "category": None,
@@ -1222,14 +1241,45 @@ class RealMLClassifier:
                    chunking_method=extracted_content.chunking_method)
         
         # Entscheide Klassifikationsstrategie
-        if extracted_content.chunking_enabled and classify_chunks_individually:
-            # Klassifiziere jeden Chunk einzeln (mit Batch-Verarbeitung)
-            result = self._classify_pdf_with_chunks_batched(extracted_content)
-        else:
-            # Klassifiziere gesamten Text (traditionell)
-            result = self._classify_pdf_traditional(extracted_content)
-        
-        return result
+        try:
+            if extracted_content.chunking_enabled and classify_chunks_individually:
+                # Klassifiziere jeden Chunk einzeln (mit Batch-Verarbeitung)
+                result = self._classify_pdf_with_chunks_batched(extracted_content)
+            else:
+                # Klassifiziere gesamten Text (traditionell)
+                result = self._classify_pdf_traditional(extracted_content)
+            
+            return result
+        except Exception as e:
+            import traceback
+            full_traceback = traceback.format_exc()
+            
+            # Log the error
+            logger.error("Classify extracted content failed", 
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        traceback=full_traceback)
+            
+            # Print to console for debugging
+            print(f"🔥 FEHLER in classify_extracted_content:")
+            print(f"   Fehler: {e}")
+            print(f"   Typ: {type(e).__name__}")
+            print("   Vollständiger Traceback:")
+            print(full_traceback)
+            print("=" * 80)
+            
+            # Return error result instead of None
+            error_result = {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": full_traceback,
+                "input_type": "pdf_extracted_content",
+                "file_path": extracted_content.file_path,
+                "category": None,
+                "confidence": 0.0,
+                "is_confident": False
+            }
+            return error_result
 
     def _classify_pdf_traditional(self, extracted_content: ExtractedContent) -> Union[Dict, PDFClassificationResult]:
         """Traditionelle PDF-Klassifikation über gesamten Text"""
@@ -1240,6 +1290,23 @@ class RealMLClassifier:
             classification_data = classification_result.dict()
         else:
             classification_data = classification_result
+        
+        # Check if classification had an error
+        if "error" in classification_data and classification_data["error"]:
+            # Return error result with PDF context
+            error_data = {
+                "error": classification_data["error"],
+                "error_type": classification_data.get("error_type", "ClassificationError"),
+                "traceback": classification_data.get("traceback", "No traceback from classify_text"),
+                "input_type": "pdf_traditional",
+                "file_path": extracted_content.file_path,
+                "page_count": extracted_content.page_count,
+                "extraction_method": extracted_content.extraction_method,
+                "category": None,
+                "confidence": 0.0,
+                "is_confident": False
+            }
+            return error_data
         
         # Erweiterte Ergebnisse mit PDF-Informationen
         enhanced_data = {

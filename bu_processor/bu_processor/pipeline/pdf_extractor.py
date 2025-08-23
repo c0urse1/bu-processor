@@ -14,6 +14,9 @@ from typing import Dict, List, Optional, Tuple, Union, Any
 import fitz  # PyMuPDF
 import PyPDF2
 
+# Re-export ContentType for API compatibility
+from .content_types import ContentType
+
 # Import the enhanced DocumentChunk model
 from ..models.chunk import DocumentChunk, create_semantic_chunk, create_paragraph_chunk
 

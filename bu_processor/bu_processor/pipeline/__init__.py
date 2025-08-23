@@ -19,6 +19,7 @@ __all__ = [
     "chatbot_integration",
     "semantic_chunking_enhancement",
     "simhash_semantic_deduplication",
+    "EnhancedIntegratedPipeline",
 ]
 
 # Lazy import helpers for backwards compatibility
@@ -56,6 +57,11 @@ def get_chatbot_integration():
     except ImportError:
         return None
 
+def get_enhanced_integrated_pipeline():
+    """Lazy import of EnhancedIntegratedPipeline."""
+    from .enhanced_integrated_pipeline import EnhancedIntegratedPipeline
+    return EnhancedIntegratedPipeline
+
 # Backwards compatibility for tests that expect immediate imports
 # Only import core components that are always needed
 try:
@@ -65,5 +71,10 @@ except ImportError:
 
 try:
     from .pdf_extractor import EnhancedPDFExtractor
+except ImportError:
+    pass
+
+try:
+    from .enhanced_integrated_pipeline import EnhancedIntegratedPipeline
 except ImportError:
     pass

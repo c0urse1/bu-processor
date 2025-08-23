@@ -5,14 +5,14 @@ This module provides a single entry point for all document chunking operations,
 deciding between semantic and simple chunking based on configuration and fallbacks.
 """
 
-import logging
 from typing import List, Optional
+from .core.logging_setup import get_logger
 from .semantic.embeddings import SbertEmbeddings
 from .semantic.chunker import semantic_segment_sentences
 from .semantic.tokens import approx_token_count
 
-# Dedicated logger for semantic operations
-logger = logging.getLogger("bu_processor.semantic")
+# Structured logger for semantic operations
+logger = get_logger("bu_processor.semantic")
 
 def sentence_split(text: str) -> List[str]:
     """
@@ -109,16 +109,19 @@ def chunk_document(text: str, enable_semantic: Optional[bool] = None,
         except Exception:
             # If config is not available, default to True and let semantic chunking fail gracefully
             use_semantic = True
-            logger.debug("Could not load semantic config, defaulting to enabled")
+            logger.debug("could not load semantic config", fallback_enabled=True)
     
     # If semantic chunking is disabled, use simple chunking
     if not use_semantic:
-        logger.debug("Semantic chunking disabled, using simple chunking")
+        logger.debug("semantic chunking disabled", chunking_method="simple")
         return simple_fixed_chunks(sentences, max_tokens=max_tokens, overlap_sentences=overlap_sentences)
     
     # Try semantic chunking with graceful fallback
     try:
-        logger.debug(f"Attempting semantic chunking - {len(sentences)} sentences")
+        logger.debug("attempting semantic chunking", 
+                    sentence_count=len(sentences),
+                    model_name=model_name,
+                    sim_threshold=sim_threshold)
         embedder = SbertEmbeddings(model_name=model_name)
         chunks = semantic_segment_sentences(
             sentences,
@@ -130,21 +133,29 @@ def chunk_document(text: str, enable_semantic: Optional[bool] = None,
         
         # Validation: ensure semantic chunking produced reasonable results
         if not chunks:
-            logger.warning("Semantic chunking produced no chunks, falling back to simple")
+            logger.warning("semantic chunking produced no chunks", fallback_method="simple")
             return simple_fixed_chunks(sentences, max_tokens=max_tokens, overlap_sentences=overlap_sentences)
         
         total_semantic_tokens = sum(approx_token_count(c) for c in chunks)
         if total_semantic_tokens < 5:
-            logger.warning(f"Semantic chunking produced very small output, falling back to simple - total_tokens={total_semantic_tokens}")
+            logger.warning("semantic chunking produced very small output", 
+                          fallback_method="simple",
+                          total_tokens=total_semantic_tokens)
             return simple_fixed_chunks(sentences, max_tokens=max_tokens, overlap_sentences=overlap_sentences)
         
-        logger.info(f"Semantic chunking successful - {len(chunks)} chunks, {total_semantic_tokens} total tokens")
+        logger.info("semantic chunking completed", 
+                   chunk_count=len(chunks),
+                   total_tokens=total_semantic_tokens,
+                   avg_chunk_size=total_semantic_tokens // len(chunks))
         return chunks
         
     except ImportError as e:
-        logger.warning(f"Semantic chunking dependencies not available, falling back to simple - error: {str(e)}")
+        logger.warning("semantic chunking dependencies not available", 
+                      error=str(e), 
+                      fallback_method="simple")
         return simple_fixed_chunks(sentences, max_tokens=max_tokens, overlap_sentences=overlap_sentences)
     
     except Exception as e:
-        logger.exception("Semantic chunking failed, falling back to simple")
+        logger.exception("semantic chunking failed", 
+                        fallback_method="simple")
         return simple_fixed_chunks(sentences, max_tokens=max_tokens, overlap_sentences=overlap_sentences)

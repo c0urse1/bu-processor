@@ -1,0 +1,18 @@
+# Large Model Files - Use Git LFS or External Storage
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.pth filter=lfs diff=lfs merge=lfs -text
+*.h5 filter=lfs diff=lfs merge=lfs -text
+
+# Other large files
+*.pdf
+*.zip
+*.tar.gz
+
+# Temporary and cache files
+**/__pycache__/
+**/.pytest_cache/
+**/htmlcov/
+**/.coverage
+**/temp/
+**/.venv/

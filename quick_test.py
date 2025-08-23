@@ -1,21 +1,46 @@
 #!/usr/bin/env python3
-import os, sys
-os.environ["ALLOW_EMPTY_PINECONE_KEY"] = "1"
-os.environ["PINECONE_API_KEY"] = ""
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+"""
+Simple test for the new /process/pdf endpoint
+"""
 
-try:
-    from bu_processor.bu_processor.pipeline.pinecone_integration import AsyncPineconeManager
-    print("Import successful")
+import sys
+import os
+
+# Add the bu_processor directory to path
+sys.path.insert(0, os.path.join(os.getcwd(), 'bu_processor'))
+
+def quick_test():
+    print("🧪 Testing API endpoint integration...")
     
-    manager = AsyncPineconeManager(stub_mode=True)
-    print(f"Manager created, stub_mode: {manager.stub_mode}")
-    
-    result = manager.search_similar_documents("test", top_k=2)
-    print(f"Result: {result}")
-    print("SUCCESS!")
-    
-except Exception as e:
-    print(f"ERROR: {e}")
-    import traceback
-    traceback.print_exc()
+    try:
+        # Import the app
+        from bu_processor.api.main import app
+        print("✅ FastAPI app imported successfully")
+        
+        # Check routes
+        routes = []
+        for route in app.routes:
+            if hasattr(route, 'path'):
+                routes.append(route.path)
+        
+        print(f"📋 Found {len(routes)} routes")
+        
+        # Check for our new endpoint
+        process_pdf_found = '/process/pdf' in routes
+        print(f"{'✅' if process_pdf_found else '❌'} /process/pdf endpoint {'found' if process_pdf_found else 'missing'}")
+        
+        # Show relevant routes
+        relevant_routes = [r for r in routes if any(keyword in r for keyword in ['process', 'classify', 'ingest'])]
+        print(f"🎯 Relevant routes ({len(relevant_routes)}):")
+        for route in relevant_routes:
+            print(f"   - {route}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
+if __name__ == "__main__":
+    success = quick_test()
+    print(f"\n{'🎉 Test passed!' if success else '💥 Test failed!'}")

@@ -1,3 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bu-processor"
+version = "0.1.0"
+description = "BU-Processor-Pipeline für PDF-Parsing und ML-Klassifikation"
+readme = "README.md"
+authors = [
+  { name = "Nicl", email = "nicl@test.de" }
+]
+requires-python = ">=3.8"
+dependencies = [
+  "pydantic>=2.0",
+  "pydantic-settings>=2.0",
+  "transformers>=4.0",
+  "pinecone>=5.0.0",
+  "openai>=1.35.0",
+  "tiktoken>=0.7.0",
+  # PDF Processing
+  "PyMuPDF>=1.24.5",
+  "PyPDF2>=3.0.1", 
+  "pdfplumber>=0.11.0",
+  # Vector Search & Retrieval
+  "faiss-cpu>=1.7.4",
+  "rank-bm25>=0.2.2",
+  # Configuration
+  "python-dotenv>=1.0.1"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-timeout>=2.4.0",
+  "pytest-cov>=4.0",
+  "black>=22.3.0",
+  "isort>=5.0",
+  "flake8>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bu_processor*"]
+exclude = ["tests*", "docs*", "examples*", "data*", "temp*", "cache*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --tb=short"
