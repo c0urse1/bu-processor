@@ -59,8 +59,7 @@ from bu_processor.utils import (
 # Legacy Integration
 from bu_processor.legacy_integration import SemanticCategorizer
 
-# Monitoring
-from prometheus_client import Counter, Histogram, Gauge
+# Logging
 import structlog
 
 # =============================================================================
@@ -220,29 +219,8 @@ model_registry = ModelRegistry()
 
 logger = Logger("ml_vs_heuristic_evaluator")
 
-# Metrics für Evaluation-Performance
-metrics = {
-    'evaluations_total': Counter(
-        'evaluations_total',
-        'Total evaluations performed',
-        ['model_type', 'dataset_type']
-    ),
-    'evaluation_duration': Histogram(
-        'evaluation_duration_seconds',
-        'Evaluation duration in seconds',
-        ['model_type', 'evaluation_type']
-    ),
-    'prediction_accuracy': Gauge(
-        'prediction_accuracy',
-        'Current prediction accuracy',
-        ['model_type', 'confidence_threshold']
-    ),
-    'errors_total': Counter(
-        'evaluation_errors_total',
-        'Total evaluation errors',
-        ['error_type', 'model_type']
-    )
-}
+# Metrics für Evaluation-Performance - removed for MVP
+metrics = {}
 
 # =============================================================================
 # VALIDATED EVALUATION CONFIGURATION

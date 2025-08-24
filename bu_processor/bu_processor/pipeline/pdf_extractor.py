@@ -5,7 +5,6 @@ import re
 import threading
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -14,10 +13,21 @@ from typing import Dict, List, Optional, Tuple, Union, Any
 import fitz  # PyMuPDF
 import PyPDF2
 
+# MVP Feature imports
+from ..core.mvp_features import safe_import_threadpool
+
+# Conditional imports for parallel processing (disabled for MVP)
+ThreadPoolExecutor = safe_import_threadpool()
+try:
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+except ImportError:
+    ProcessPoolExecutor = None
+    as_completed = None
+
 # Re-export ContentType for API compatibility
 from .content_types import ContentType
 
-# Import the enhanced DocumentChunk model
+# Import DocumentChunk from models package
 from ..models.chunk import DocumentChunk, create_semantic_chunk, create_paragraph_chunk
 
 # Meaningful text validation constants
@@ -1128,7 +1138,7 @@ class EnhancedPDFExtractor:
         return combined, pages
     
     def _extract_pages_parallel(self, doc, page_count: int) -> str:
-        """Parallele Seiten-Extraktion für große PDFs"""
+        """Parallele Seiten-Extraktion für große PDFs (MVP: sequential fallback)"""
         def extract_page(page_num: int) -> Tuple[int, str]:
             try:
                 page = doc.load_page(page_num)
@@ -1137,10 +1147,27 @@ class EnhancedPDFExtractor:
                 logger.warning(f"Failed to extract page {page_num}: {e}")
                 return page_num, ""
         
-        # Thread-safe extraction
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_page = {executor.submit(extract_page, i): i for i in range(page_count)}
+        # MVP: Use sequential processing if ThreadPoolExecutor is disabled
+        if ThreadPoolExecutor is None:
             page_texts = {}
+            for i in range(page_count):
+                page_num, text = extract_page(i)
+                page_texts[page_num] = text
+        else:
+            # Thread-safe extraction
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                if as_completed is not None:
+                    future_to_page = {executor.submit(extract_page, i): i for i in range(page_count)}
+                    page_texts = {}
+                    for future in as_completed(future_to_page):
+                        page_num, text = future.result()
+                        page_texts[page_num] = text
+                else:
+                    # Fallback if as_completed not available
+                    page_texts = {}
+                    for i in range(page_count):
+                        page_num, text = extract_page(i)
+                        page_texts[page_num] = text
             
             for future in as_completed(future_to_page):
                 try:
@@ -1327,15 +1354,27 @@ class EnhancedPDFExtractor:
         if not files:
             return []
             
-        logger.info("Starting parallel PDF extraction", file_count=len(files))
+        logger.info("Starting PDF extraction", file_count=len(files))
         
-        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-            results = list(executor.map(extract_single_file, files))
+        # MVP: Use sequential processing if ProcessPoolExecutor is disabled
+        if ProcessPoolExecutor is None:
+            results = []
+            for file_path in files:
+                try:
+                    extractor = EnhancedPDFExtractor(enable_chunking=self.enable_chunking)
+                    result = extractor.extract_text_from_pdf(file_path, chunking_strategy=chunking_strategy)
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Extraction failed for {file_path}: {e}")
+                    results.append(None)
+        else:
+            with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+                results = list(executor.map(extract_single_file, files))
         
         # Filter None results (failed extractions)
         successful_results = [r for r in results if r is not None]
         
-        logger.info("Parallel extraction completed", 
+        logger.info("PDF extraction completed", 
                    successful=len(successful_results),
                    failed=len(files) - len(successful_results))
         

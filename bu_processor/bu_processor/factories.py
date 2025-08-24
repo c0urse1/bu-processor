@@ -1,6 +1,38 @@
 from bu_processor.config import settings
 from bu_processor.storage.sqlite_store import SQLiteStore
 
+# =============================================================================
+# NEW SIMPLIFIED FACTORIES FOR MVP
+# =============================================================================
+
+def make_simplified_embedder():
+    """Create the new simplified embedder."""
+    from bu_processor.embeddings.embedder import Embedder
+    return Embedder()
+
+def make_simplified_pinecone_manager():
+    """Create the new simplified Pinecone manager using standardized wiring."""
+    from bu_processor.integrations.pinecone_facade import make_pinecone_manager
+    import os
+    
+    return make_pinecone_manager(
+        index_name=os.getenv("PINECONE_INDEX_NAME", "bu-processor"),
+        api_key=os.getenv("PINECONE_API_KEY"),
+        environment=os.getenv("PINECONE_ENV"),       # v2
+        cloud=os.getenv("PINECONE_CLOUD"),           # v3
+        region=os.getenv("PINECONE_REGION"),         # v3
+        namespace=os.getenv("PINECONE_NAMESPACE")
+    )
+
+def make_simplified_upsert_pipeline():
+    """Create the new simplified upsert pipeline."""
+    from bu_processor.pipeline.simplified_upsert import SimplifiedUpsertPipeline
+    return SimplifiedUpsertPipeline()
+
+# =============================================================================
+# LEGACY FACTORIES (for backward compatibility)
+# =============================================================================
+
 # embeddings
 def make_embedder():
     if settings.EMBEDDINGS_BACKEND == "sbert":
@@ -13,6 +45,9 @@ def make_embedder():
     elif settings.EMBEDDINGS_BACKEND == "fake":
         from bu_processor.embeddings.testing_backend import FakeDeterministicEmbeddings
         return FakeDeterministicEmbeddings(dim=128)
+    elif settings.EMBEDDINGS_BACKEND == "simplified":
+        # New simplified backend
+        return make_simplified_embedder()
     else:
         raise ValueError("Unknown EMBEDDINGS_BACKEND")
 

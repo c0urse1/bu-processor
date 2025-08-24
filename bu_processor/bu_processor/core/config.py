@@ -282,12 +282,6 @@ class APIConfig(BaseSettings):
         description="API Port"
     )
     
-    # Monitoring
-    prometheus_metrics_port: PositiveInt = Field(
-        default=9100,
-        description="Prometheus Metrics Port"
-    )
-    
     # Security (aus Umgebungsvariablen)
     api_key: Optional[str] = Field(
         default=None,
@@ -332,41 +326,88 @@ class APIConfig(BaseSettings):
         return v
 
 class VectorDatabaseConfig(BaseSettings):
-    """Vector Database (Pinecone) Konfiguration"""
+    """Vector Database (Pinecone) Konfiguration - MVP Clean Version"""
     
     # Pinecone Settings
     pinecone_api_key: Optional[str] = Field(
         default=None,
         description="Pinecone API Key"
     )
-    pinecone_environment: str = Field(
-        default="us-west1-gcp-free",
-        description="Pinecone Environment"
+    pinecone_env: str = Field(
+        default="us-west1-gcp",
+        description="Pinecone Environment (v2)",
+        alias="pinecone_environment"  # Support both names
     )
     pinecone_index_name: str = Field(
         default="bu-processor",
         description="Pinecone Index Name"
     )
+    pinecone_cloud: Optional[str] = Field(
+        default="gcp",
+        description="Pinecone Cloud Provider (v3 serverless)"
+    )
+    pinecone_region: Optional[str] = Field(
+        default="us-west1",
+        description="Pinecone Region (v3 serverless)"
+    )
+    pinecone_namespace: Optional[str] = Field(
+        default="bu",
+        description="Pinecone Namespace"
+    )
     
     # Embedding Settings
-    embedding_dimension: PositiveInt = Field(
-        default=384,
-        description="Embedding Dimension"
-    )
     embedding_model: str = Field(
-        default="paraphrase-multilingual-MiniLM-L12-v2",
+        default="sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
         description="Embedding Model Name"
     )
+    embedding_dim: Optional[PositiveInt] = Field(
+        default=None,  # Auto-detected from model
+        description="Embedding Dimension (optional - auto-detected)",
+        alias="embedding_dimension"  # Support both names
+    )
     
-    # Processing Settings
-    max_batch_size: PositiveInt = Field(
-        default=100,
-        description="Maximale Batch-Größe für Uploads"
-    )
+    # Core Toggle - Use enable_vector_db as primary field name
     enable_vector_db: bool = Field(
-        default=False,
-        description="Vector Database Integration aktivieren"
+        default=True,
+        description="Enable Vector Database Integration"
     )
+    
+    # MVP Feature flags (all disabled by default)
+    enable_metrics: bool = Field(
+        default=False,
+        description="Enable Prometheus metrics (disabled for MVP)"
+    )
+    enable_embedding_cache: bool = Field(
+        default=False,
+        description="Enable embedding caching (disabled for MVP)"
+    )
+    enable_threadpool: bool = Field(
+        default=False,
+        description="Enable ThreadPoolExecutor optimizations (disabled for MVP)"
+    )
+    
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        # Field aliases for environment variables
+        fields={
+            'enable_vector_db': {'alias': 'VECTOR_DB_ENABLE'}
+        }
+    )
+    
+    def model_post_init(self, __context):
+        """Backward compatibility for alternative field names."""
+        # Tolerate alternative names in underlying dict
+        data = self.__dict__
+        for alt in ("enabled", "enable_vectorstore", "vector_db", "vector_db_enabled", "vector_db_enable"):
+            if alt in data and "enable_vector_db" not in data:
+                self.enable_vector_db = bool(data[alt])
+                break
+    
+    # Remove the backward compatibility property since we now use enable_vector_db as primary
     
     @field_validator('pinecone_api_key')
     @classmethod

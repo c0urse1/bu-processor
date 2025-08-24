@@ -34,12 +34,12 @@ except ImportError:
     ValidationError = Exception
     PYDANTIC_AVAILABLE = False
 
-# ThreadPoolExecutor import
-try:
-    from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-except ImportError:
-    ThreadPoolExecutor = None  # type: ignore
-    ProcessPoolExecutor = None  # type: ignore
+# MVP Feature imports
+from ..core.mvp_features import safe_import_threadpool
+
+# ThreadPoolExecutor import (conditionally disabled for MVP)
+ThreadPoolExecutor = safe_import_threadpool()
+ProcessPoolExecutor = None  # Disabled for MVP
 
 from .pdf_extractor import EnhancedPDFExtractor, ChunkingStrategy
 from .classifier import RealMLClassifier
@@ -444,8 +444,11 @@ class EnhancedIntegratedPipeline:
         # Initialize Components
         self._initialize_components(model_path, pinecone_config)
         
-        # Thread Pool für parallele Verarbeitung
-        self.executor = ThreadPoolExecutor(max_workers=8)
+        # Thread Pool für parallele Verarbeitung (MVP: disabled)
+        if ThreadPoolExecutor is not None:
+            self.executor = ThreadPoolExecutor(max_workers=8)
+        else:
+            self.executor = None
         
     def _initialize_components(self, model_path: Optional[str], pinecone_config: Optional[Dict]):
         """Initialisiert alle Pipeline-Komponenten"""
@@ -1649,6 +1652,31 @@ def process_documents_multiprocessing(
     tasks: List[Tuple[str, Optional[str], Optional[Dict[str, Any]], str]] = [
         (p, strategy, custom_config, default_strategy) for p in normalized
     ]
+
+    # MVP: Use sequential processing instead of parallel executors
+    if ThreadPoolExecutor is None or ProcessPoolExecutor is None:
+        # Sequential fallback for MVP
+        for task in tasks:
+            file_path, strategy, custom_config, default_strategy = task
+            try:
+                # Use the same worker function but sequentially
+                file_path_result, result = _mp_worker_process_document(task)
+                results_map[file_path_result] = result
+            except Exception as e:
+                results_map[file_path] = {
+                    "success": False,
+                    "errors": [str(e)],
+                    "processing_time": 0.0,
+                    "chunks_created": 0,
+                    "classification": None,
+                    "confidence": None,
+                    "pinecone_uploads": 0,
+                    "similar_docs_found": 0,
+                    "errors_count": 1,
+                    "warnings_count": 0
+                }
+        logger.info(f"✅ Sequential processing completed for {len(tasks)} documents")
+        return [results_map[p] for p in normalized]
 
     # Windows-Schutz: ohne __main__-Guard fallback auf Threads (Test-Kontext)
     if sys.platform.startswith("win") and __name__ != "__main__":
