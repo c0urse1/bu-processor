@@ -1,131 +1,128 @@
 # bu_processor/integrations/pinecone_enhanced.py
 from __future__ import annotations
-from typing import List, Dict, Optional, Any, TYPE_CHECKING
+from typing import List, Dict, Any, Optional
+import os
 
-if TYPE_CHECKING:
-    from ..embeddings.embedder import Embedder
+# Flags kannst du später nutzen, um Features zuzuschalten
+from bu_processor.core.flags import (
+    ENABLE_METRICS, ENABLE_RATE_LIMITER, ENABLE_EMBED_CACHE, ENABLE_RERANK
+)
+
+# Wir nutzen die Simple-Implementierung als inneren Motor
+from .pinecone_simple import PineconeManager as _SimplePinecone
+
+# (Optional) Metrik-Adapter – macht bei ENABLE_METRICS=False nichts
+try:
+    from bu_processor.observability.metrics import upsert_latency  # HistogramClass
+except Exception:
+    upsert_latency = None
+
+def _maybe_observe(hist, seconds: float) -> None:
+    if hist is not None and hasattr(hist, "observe"):
+        try:
+            hist.observe(seconds)
+        except Exception:
+            pass
 
 class PineconeEnhancedManager:
     """
-    Enhanced Pinecone manager with advanced features.
-    
-    This implementation provides additional functionality:
-    - Batch operations
-    - Performance monitoring
-    - Advanced indexing strategies
-    - Metrics collection
-    - Custom embedding strategies
-    - Quality gates and consistency checks
-    - Optional reranking with cross-encoders
-    
-    Note: This class requires additional dependencies and configuration.
-    Use the facade pattern to access this functionality when enabled.
+    Enhanced-Variante als dünne Fassade um den Simple-Manager.
+    - bietet dieselbe API wie Simple
+    - Platz für spätere Features: Async-Upserts, Retry, Rate-Limits, Prometheus, Rerank
+    - aktuell synchron & delegiert an _SimplePinecone
     """
-    
-    def __init__(self, *args, **kwargs):
-        """Initialize enhanced Pinecone manager."""
-        # Placeholder for enhanced implementation
-        raise NotImplementedError(
-            "Enhanced Pinecone features are not yet implemented. "
-            "Use the simple implementation or enable feature flags when available."
+
+    def __init__(
+        self,
+        index_name: str,
+        api_key: Optional[str] = None,
+        environment: Optional[str] = None,  # v2
+        cloud: Optional[str] = None,        # v3
+        region: Optional[str] = None,       # v3
+        metric: str = "cosine",
+        namespace: Optional[str] = None
+    ):
+        # Kein NotImplementedError mehr – wir sind lauffähig.
+        self._inner = _SimplePinecone(
+            index_name=index_name,
+            api_key=api_key,
+            environment=environment,
+            cloud=cloud,
+            region=region,
+            metric=metric,
+            namespace=namespace,
         )
 
-    # --- Essential index management methods ---
+    # --- Management ---
     def ensure_index(self, dimension: int) -> None:
-        """Ensure index exists with given dimension."""
-        raise NotImplementedError("Enhanced features not implemented")
-    
+        self._inner.ensure_index(dimension)
+
     def get_index_dimension(self) -> Optional[int]:
-        """Get the dimension of the existing index."""
-        raise NotImplementedError("Enhanced features not implemented")
-    
-    def delete_by_document_id(self, doc_id: str, namespace: Optional[str] = None) -> None:
-        """Delete all vectors for a document."""
-        raise NotImplementedError("Enhanced features not implemented")
-    
-    # Essential query methods (should be implemented even in enhanced version)
-    def query_by_vector(self, vector: List[float], top_k: int = 5, **kwargs) -> Dict[str, Any]:
-        """Query for similar vectors."""
-        raise NotImplementedError("Enhanced features not implemented")
-    
-    def query_by_text(
-        self, 
-        text: str, 
-        embedder: "Embedder", 
-        top_k: int = 5,
-        include_metadata: bool = True,
-        namespace: Optional[str] = None,
-        filter: Optional[Dict[str, Any]] = None,
-        enable_rerank: Optional[bool] = None
-    ) -> Dict[str, Any]:
-        """
-        Search for similar texts via embedding with optional reranking.
-        
-        This method closes the query path gap by allowing text-based search
-        without requiring users to handle embedding conversion manually.
-        Includes intelligence booster through optional reranking.
-        """
-        raise NotImplementedError("Enhanced features not implemented")
-    
-    # Essential upsert methods - unified signature with quality gates
+        return self._inner.get_index_dimension()
+
+    # --- Upsert ---
     def upsert_vectors(
         self,
         ids: List[str],
         vectors: List[List[float]],
         metadatas: Optional[List[Dict[str, Any]]] = None,
-        namespace: Optional[str] = None,
-        embedder: Optional["Embedder"] = None,
-        skip_quality_gates: bool = False
+        namespace: Optional[str] = None
     ) -> Any:
-        """Upload vectors to the index - unified signature with quality gates."""
-        raise NotImplementedError("Enhanced features not implemented")
-    
+        # Hook für Metrics/Rate-Limit/Retry – später zuschalten
+        if ENABLE_METRICS and upsert_latency is not None:
+            import time
+            t0 = time.time()
+            try:
+                return self._inner.upsert_vectors(ids, vectors, metadatas, namespace)
+            finally:
+                _maybe_observe(upsert_latency, time.time() - t0)
+        return self._inner.upsert_vectors(ids, vectors, metadatas, namespace)
+
     def upsert_items(
         self,
         items: List[Dict[str, Any]],
-        namespace: Optional[str] = None,
-        embedder: Optional["Embedder"] = None,
-        skip_quality_gates: bool = False
+        namespace: Optional[str] = None
     ) -> Any:
-        """Upload items to the index - unified signature with quality gates.
-        
-        Args:
-            items: List of dicts with format {"id": str, "values": List[float], "metadata": Dict}
-            namespace: Optional namespace
-            embedder: Embedder instance for dimension checks
-            skip_quality_gates: Skip quality gates (for testing)
-        """
-        raise NotImplementedError("Enhanced features not implemented")
-    
-    def upsert_document(self, *, ids=None, vectors=None, metadatas=None, namespace=None, items=None):
-        """Legacy adapter method for backward compatibility."""
-        if items is not None:
-            return self.upsert_items(items, namespace=namespace)
-        return self.upsert_vectors(ids, vectors, metadatas, namespace)
-        # Even in enhanced version, this would work the same way
-        vec = embedder.encode_one(text)
-        return self.query_by_vector(
-            vector=vec, 
-            top_k=top_k,
-            include_metadata=include_metadata,
-            namespace=namespace,
-            filter=filter
-        )
-    
-    # Advanced methods would go here when implemented
-    def batch_upsert_with_retry(self, items: List[Dict[str, Any]], **kwargs) -> Any:
-        """Batch upsert with retry logic and error handling."""
-        raise NotImplementedError("Enhanced features not implemented")
-    
-    def monitor_performance(self) -> Dict[str, Any]:
-        """Collect performance metrics."""
-        raise NotImplementedError("Enhanced features not implemented")
-    
-    def optimize_index(self) -> bool:
-        """Optimize index performance."""
-        raise NotImplementedError("Enhanced features not implemented")
+        return self._inner.upsert_items(items, namespace)
 
-# Exports
-__all__ = [
-    "PineconeEnhancedManager"
-]
+    # --- Query ---
+    def query_by_vector(
+        self,
+        vector: List[float],
+        top_k: int = 5,
+        include_metadata: bool = True,
+        namespace: Optional[str] = None,
+        filter: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        res = self._inner.query_by_vector(
+            vector, top_k=top_k, include_metadata=include_metadata,
+            namespace=namespace, filter=filter
+        )
+        # Platz für Reranking via Cross-Encoder
+        # if ENABLE_RERANK: res = self._rerank(res, vector_or_text=...)
+        return res
+
+    def query_by_text(
+        self,
+        text: str,
+        embedder,
+        top_k: int = 5,
+        include_metadata: bool = True,
+        namespace: Optional[str] = None,
+        filter: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        res = self._inner.query_by_text(
+            text, embedder, top_k=top_k, include_metadata=include_metadata,
+            namespace=namespace, filter=filter
+        )
+        # if ENABLE_RERANK: res = self._rerank(res, query_text=text)
+        return res
+
+    # --- Delete ---
+    def delete_by_document_id(self, doc_id: str, namespace: Optional[str] = None) -> Any:
+        return self._inner.delete_by_document_id(doc_id, namespace)
+
+    # --- (Optional) Rerank-Skizze für später ---
+    # def _rerank(self, pinecone_result: Dict[str, Any], query_text: str | None = None, vector_or_text=None):
+    #     # Hier könntest du mit cross-encoder/ms-marco-MiniLM-L-6-v2 Scores nachziehen und neu sortieren.
+    #     return pinecone_result

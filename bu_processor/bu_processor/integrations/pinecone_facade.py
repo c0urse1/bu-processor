@@ -14,205 +14,76 @@ if TYPE_CHECKING:
 
 # Import feature flags
 try:
-    from ..core.flags import FeatureFlags
-    flags = FeatureFlags()
+    from ..core.flags import ENABLE_ENHANCED_PINECONE
+    from .pinecone_enhanced import PineconeEnhancedManager
+    from .pinecone_simple import PineconeManager as SimplePineconeManager
 except ImportError:
     # Fallback if flags not available
-    class _FallbackFlags:
-        enable_enhanced_pinecone = False
-    flags = _FallbackFlags()
+    ENABLE_ENHANCED_PINECONE = False
+    from .pinecone_simple import PineconeManager as SimplePineconeManager
 
 class PineconeManager:
     """
-    Facade for Pinecone operations that automatically selects
-    the appropriate implementation (simple or enhanced) based
-    on feature flags and system configuration.
+    Robust facade for Pinecone operations that automatically selects
+    the appropriate implementation (simple or enhanced) based on feature flags.
+    Falls back to simple implementation if enhanced fails.
     """
     
-    def __init__(
-        self,
-        index_name: str,
-        api_key: Optional[str] = None,
-        environment: Optional[str] = None,
-        cloud: Optional[str] = None,
-        region: Optional[str] = None,
-        metric: str = "cosine",
-        namespace: Optional[str] = None,
-        force_simple: bool = False
-    ):
-        """
-        Initialize Pinecone manager.
-        
-        Args:
-            index_name: Name of the Pinecone index
-            api_key: Pinecone API key (defaults to environment variable)
-            environment: Pinecone environment (v2 compatibility)
-            cloud: Cloud provider for serverless (v3)
-            region: Region for serverless (v3)
-            metric: Distance metric for the index
-            namespace: Default namespace for operations
-            force_simple: Force use of simple implementation
-        """
-        self.index_name = index_name
-        self.api_key = api_key
-        self.environment = environment
-        self.cloud = cloud
-        self.region = region
-        self.metric = metric
-        self.namespace = namespace
-        
-        # Determine which implementation to use
-        use_enhanced = (
-            getattr(flags, 'enable_enhanced_pinecone', False) 
-            and not force_simple
-        )
-        
-        if use_enhanced:
+    def __init__(self, *args, **kwargs):
+        # Facade-only flags abfangen (nicht weiterreichen!)
+        force_simple   = kwargs.pop("force_simple", None)
+        force_enhanced = kwargs.pop("force_enhanced", None)
+
+        if force_simple and force_enhanced:
+            raise ValueError("force_simple und force_enhanced schließen sich gegenseitig aus.")
+
+        # Explizite Steuerung hat Vorrang
+        if force_simple is True:
+            self._impl = SimplePineconeManager(*args, **kwargs)
+            return
+        if force_enhanced is True:
             try:
-                self._impl = self._create_enhanced_manager()
+                self._impl = PineconeEnhancedManager(*args, **kwargs)
+                return
             except Exception:
-                # Fall back to simple if enhanced fails
-                self._impl = self._create_simple_manager()
-        else:
-            self._impl = self._create_simple_manager()
+                # Fallback auf Simple, wenn Enhanced fehlschlägt
+                self._impl = SimplePineconeManager(*args, **kwargs)
+                return
+
+        # Sonst per Feature-Flag wählen
+        if ENABLE_ENHANCED_PINECONE:
+            try:
+                self._impl = PineconeEnhancedManager(*args, **kwargs)
+                return
+            except Exception:
+                # Safety net: fällt auf Simple zurück
+                self._impl = SimplePineconeManager(*args, **kwargs)
+                return
+
+        # Default: Simple
+        self._impl = SimplePineconeManager(*args, **kwargs)
+
+    # Delegation
+    def ensure_index(self, *a, **kw):         
+        return self._impl.ensure_index(*a, **kw)
     
-    def _create_simple_manager(self):
-        """Create simple Pinecone manager instance."""
-        from .pinecone_simple import PineconeManager as SimplePineconeManager
-        return SimplePineconeManager(
-            index_name=self.index_name,
-            api_key=self.api_key,
-            environment=self.environment,
-            cloud=self.cloud,
-            region=self.region,
-            metric=self.metric,
-            namespace=self.namespace
-        )
+    def get_index_dimension(self, *a, **kw):  
+        return self._impl.get_index_dimension(*a, **kw)
     
-    def _create_enhanced_manager(self):
-        """Create enhanced Pinecone manager instance."""
-        from .pinecone_enhanced import PineconeEnhancedManager
-        return PineconeEnhancedManager(
-            index_name=self.index_name,
-            api_key=self.api_key,
-            environment=self.environment,
-            cloud=self.cloud,
-            region=self.region,
-            metric=self.metric,
-            namespace=self.namespace
-        )
+    def upsert_vectors(self, *a, **kw):       
+        return self._impl.upsert_vectors(*a, **kw)
     
-    # --- Delegate all methods to the underlying implementation ---
+    def upsert_items(self, *a, **kw):         
+        return self._impl.upsert_items(*a, **kw)
     
-    def ensure_index(self, dimension: int) -> None:
-        """Ensure index exists with given dimension."""
-        return self._impl.ensure_index(dimension)
+    def query_by_vector(self, *a, **kw):      
+        return self._impl.query_by_vector(*a, **kw)
     
-    def get_index_dimension(self) -> Optional[int]:
-        """Get the dimension of the index."""
-        return self._impl.get_index_dimension()
+    def query_by_text(self, *a, **kw):        
+        return self._impl.query_by_text(*a, **kw)
     
-    def upsert_vectors(
-        self,
-        ids: List[str],
-        vectors: List[List[float]],
-        metadatas: Optional[List[Dict[str, Any]]] = None,
-        namespace: Optional[str] = None,
-        **kwargs
-    ) -> Any:
-        """Upload vectors to the index with optional quality gates."""
-        return self._impl.upsert_vectors(ids, vectors, metadatas, namespace, **kwargs)
-    
-    def upsert_items(
-        self,
-        items: List[Dict[str, Any]],
-        namespace: Optional[str] = None,
-        **kwargs
-    ) -> Any:
-        """Upload items to the index with optional quality gates."""
-        return self._impl.upsert_items(items, namespace, **kwargs)
-    
-    def query_by_vector(
-        self,
-        vector: List[float],
-        top_k: int = 5,
-        include_metadata: bool = True,
-        namespace: Optional[str] = None,
-        filter: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Query for similar vectors."""
-        return self._impl.query_by_vector(vector, top_k, include_metadata, namespace, filter)
-    
-    def query_by_text(
-        self,
-        text: str,
-        embedder: "Embedder",
-        top_k: int = 5,
-        include_metadata: bool = True,
-        namespace: Optional[str] = None,
-        filter: Optional[Dict[str, Any]] = None,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """Query for similar texts via embedding with optional reranking."""
-        return self._impl.query_by_text(text, embedder, top_k, include_metadata, namespace, filter, **kwargs)
-    
-    def delete_by_document_id(self, doc_id: str, namespace: Optional[str] = None) -> Any:
-        """Delete document by document ID."""
-        return self._impl.delete_by_document_id(doc_id, namespace)
-    
-    # --- Legacy compatibility methods ---
-    
-    def upsert_document(self, **kwargs) -> Any:
-        """Legacy wrapper for upsert functionality."""
-        return self._impl.upsert_document(**kwargs)
-    
-    def search_similar_documents(
-        self,
-        query_vector: List[float],
-        top_k: int = 10,
-        namespace: Optional[str] = None,
-        filter_dict: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
-        """Legacy wrapper for search functionality."""
-        return self._impl.search_similar_documents(query_vector, top_k, namespace, filter_dict)
-    
-    # --- Enhanced methods (if available) ---
-    
-    def batch_upsert_with_retry(self, items: List[Dict[str, Any]], **kwargs) -> Any:
-        """Batch upsert with retry logic (enhanced feature)."""
-        if hasattr(self._impl, 'batch_upsert_with_retry'):
-            return self._impl.batch_upsert_with_retry(items, **kwargs)
-        else:
-            # Fallback to simple upsert
-            return self._impl.upsert_items(items, **kwargs)
-    
-    def monitor_performance(self) -> Dict[str, Any]:
-        """Monitor performance metrics (enhanced feature)."""
-        if hasattr(self._impl, 'monitor_performance'):
-            return self._impl.monitor_performance()
-        else:
-            return {"implementation": "simple", "enhanced_monitoring": False}
-    
-    def optimize_index(self) -> bool:
-        """Optimize index performance (enhanced feature)."""
-        if hasattr(self._impl, 'optimize_index'):
-            return self._impl.optimize_index()
-        else:
-            return False
-    
-    # --- Utility properties ---
-    
-    @property
-    def implementation_type(self) -> str:
-        """Get the type of implementation being used."""
-        if hasattr(self._impl, '__class__'):
-            return self._impl.__class__.__name__
-        return "unknown"
-    
-    @property
-    def is_enhanced(self) -> bool:
-        """Check if enhanced implementation is being used."""
-        return "Enhanced" in self.implementation_type
+    def delete_by_document_id(self, *a, **kw):
+        return self._impl.delete_by_document_id(*a, **kw)
 
 
 # Factory function for compatibility
@@ -229,7 +100,7 @@ def make_pinecone_manager(
     region: Optional[str] = None,       # v3 serverless
     metric: str = "cosine",
     namespace: Optional[str] = None,
-    force_simple: bool = False
+    **kwargs  # Allow force_* flags to be passed through if caller wants them
 ) -> PineconeManager:
     """
     Standardized factory function for creating Pinecone managers.
@@ -245,7 +116,7 @@ def make_pinecone_manager(
         region: Region for v3 serverless (defaults to PINECONE_REGION env var)
         metric: Distance metric (default: cosine)
         namespace: Default namespace (defaults to PINECONE_NAMESPACE env var)
-        force_simple: Force simple implementation (default: False)
+        **kwargs: Additional arguments including optional force_simple/force_enhanced flags
     
     Returns:
         PineconeManager facade instance
@@ -274,6 +145,7 @@ def make_pinecone_manager(
     region = region or os.getenv("PINECONE_REGION")
     namespace = namespace or os.getenv("PINECONE_NAMESPACE")
     
+    # KEINE force_* Flags hier einfügen – nur durchreichen, falls der Aufrufer sie bewusst übergibt
     return PineconeManager(
         index_name=index_name,
         api_key=api_key,
@@ -282,7 +154,7 @@ def make_pinecone_manager(
         region=region,
         metric=metric,
         namespace=namespace,
-        force_simple=force_simple
+        **kwargs  # Pass through any additional kwargs including force flags
     )
 
 

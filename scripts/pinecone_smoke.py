@@ -8,8 +8,12 @@ Testet die grundlegende Funktionalität der vereinfachten Pinecone-Integration.
 
 # scripts/pinecone_smoke.py (aus Repo-Root starten)
 import os
+from dotenv import load_dotenv
 from bu_processor.embeddings.embedder import Embedder
 from bu_processor.integrations.pinecone_manager import PineconeManager
+
+# Load environment variables from .env file
+load_dotenv()
 
 def main():
     print("🧪 PINECONE SMOKE TEST")
@@ -30,6 +34,8 @@ def main():
             namespace=os.getenv("PINECONE_NAMESPACE")
         )
         print("✅ PineconeManager initialized")
+        print("Manager impl:", type(pc).__name__)
+        # Erwartung mit Flag: PineconeManager (Facade) → intern Enhanced (delegiert an Simple)
         
         print(f"\n🔧 Ensuring index exists (dimension: {embedder.dimension})...")
         pc.ensure_index(dimension=embedder.dimension)
